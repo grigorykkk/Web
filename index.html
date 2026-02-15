@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Карточка товара (SCSS)</title>
+    <link rel="stylesheet" href="./dist/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <article class="product-card product-card--accent">
+        <div class="product-card__media">
+          <img
+            class="product-card__img"
+            src="https://images.unsplash.com/photo-1518441902117-f0a9b13f2d4e?auto=format&fit=crop&w=900&q=80"
+            alt="Наушники"
+            loading="lazy"
+          />
+        </div>
+
+        <div class="product-card__content">
+          <h2 class="product-card__title">Наушники Aurora X</h2>
+          <p class="product-card__desc">
+            Лёгкие, удобные, с плотным басом и шумоподавлением. До 30 часов работы от батареи.
+          </p>
+
+          <div class="product-card__actions">
+            <a class="btn btn--primary" href="#">Купить</a>
+            <a class="btn btn--ghost" href="#">Подробнее</a>
+          </div>
+        </div>
+      </article>
+    </main>
+  </body>
+</html>
