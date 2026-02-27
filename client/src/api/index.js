@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const apiClient = axios.create({
-  baseURL: 'https://stunning-couscous-7v9jx5jp44v72xgr9-3000.app.github.dev/',
+  baseURL: 'http://localhost:3000/api',
   headers: {
     'Content-Type': 'application/json',
     'accept': 'application/json',
