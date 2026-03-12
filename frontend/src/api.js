@@ -1,7 +1,32 @@
 import axios from "axios";
 
+function resolveApiBaseUrl() {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+
+  const protocol = window.location.protocol;
+  const hostname = window.location.hostname;
+  const backendPort = import.meta.env.VITE_BACKEND_PORT || "3000";
+
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return `${protocol}//${hostname}:${backendPort}/api`;
+  }
+
+  if (hostname.endsWith(".app.github.dev")) {
+    const subdomain = hostname.replace(".app.github.dev", "");
+    const lastDashIndex = subdomain.lastIndexOf("-");
+    const codespaceName =
+      lastDashIndex !== -1 ? subdomain.slice(0, lastDashIndex) : subdomain;
+
+    return `${protocol}//${codespaceName}-${backendPort}.app.github.dev/api`;
+  }
+
+  return `${protocol}//${hostname}/api`;
+}
+
 const apiClient = axios.create({
-  baseURL: "http://localhost:3000/api",
+  baseURL: resolveApiBaseUrl(),
   headers: {
     "Content-Type": "application/json",
     accept: "application/json",
@@ -77,6 +102,7 @@ apiClient.interceptors.response.use(
     if (
       error.response &&
       error.response.status === 401 &&
+      originalRequest &&
       !originalRequest._retry
     ) {
       originalRequest._retry = true;
@@ -103,6 +129,7 @@ apiClient.interceptors.response.use(
         localStorage.setItem("accessToken", newAccessToken);
         localStorage.setItem("refreshToken", newRefreshToken);
 
+        originalRequest.headers = originalRequest.headers || {};
         originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
 
         return apiClient(originalRequest);

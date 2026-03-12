@@ -5,14 +5,43 @@ const cors = require("cors");
 const { nanoid } = require("nanoid");
 
 const app = express();
-const PORT = 3000;
+
+const PORT = process.env.PORT || 3000;
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+
+  if (
+    origin.startsWith("http://localhost:") ||
+    origin.startsWith("http://127.0.0.1:")
+  ) {
+    return true;
+  }
+
+  if (
+    process.env.CODESPACE_NAME &&
+    origin.includes(`${process.env.CODESPACE_NAME}-`) &&
+    origin.endsWith(".app.github.dev")
+  ) {
+    return true;
+  }
+
+  return false;
+}
 
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin(origin, callback) {
+      if (isAllowedOrigin(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
     credentials: false,
   })
 );
+
 app.use(express.json());
 
 const ACCESS_SECRET = "access_secret_key_change_me";
@@ -21,7 +50,7 @@ const REFRESH_SECRET = "refresh_secret_key_change_me";
 const ACCESS_EXPIRES_IN = "15m";
 const REFRESH_EXPIRES_IN = "7d";
 
-// Начальный пользователь, чтобы можно было войти сразу
+// Тестовый пользователь
 // email: grigory@example.com
 // password: grigory123
 let users = [
@@ -30,8 +59,7 @@ let users = [
     email: "grigory@example.com",
     first_name: "Григорий",
     last_name: "Костин",
-    passwordHash:
-      "$2b$10$akAt3HLdpFiBHxvmsLOcYuYY38ixwzhZrAOBqnscRQTVqSatE20XC",
+    passwordHash: bcrypt.hashSync("grigory123", 10),
   },
 ];
 
@@ -98,10 +126,6 @@ function authMiddleware(req, res, next) {
 function getRefreshTokenFromHeaders(req) {
   return req.headers["x-refresh-token"] || req.headers["refresh-token"];
 }
-
-// =========================
-// AUTH
-// =========================
 
 app.post("/api/auth/register", async (req, res) => {
   const { email, password, first_name, last_name } = req.body;
@@ -231,10 +255,6 @@ app.get("/api/auth/me", authMiddleware, (req, res) => {
   });
 });
 
-// =========================
-// PRODUCTS
-// =========================
-
 app.post("/api/products", authMiddleware, (req, res) => {
   const { title, category, description, price } = req.body;
 
@@ -295,6 +315,7 @@ app.put("/api/products/:id", authMiddleware, (req, res) => {
         error: "price must be a non-negative number",
       });
     }
+
     product.price = price;
   }
 
@@ -316,6 +337,10 @@ app.delete("/api/products/:id", authMiddleware, (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend started: http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  const backendUrl = process.env.CODESPACE_NAME
+    ? `https://${process.env.CODESPACE_NAME}-${PORT}.app.github.dev`
+    : `http://localhost:${PORT}`;
+
+  console.log(`Backend started: ${backendUrl}`);
 });
