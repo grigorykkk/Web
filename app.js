@@ -10,9 +10,15 @@ const app = express();
 const PORT = 3000;
 
 app.use(cors());
+app.use(express.json());
 
-const JWT_SECRET = "access_secret_key_change_in_prod";
+// Секреты подписи
+const ACCESS_SECRET = "access_secret_key_change_in_prod";
+const REFRESH_SECRET = "refresh_secret_key_change_in_prod";
+
+// Время жизни токенов
 const ACCESS_EXPIRES_IN = "15m";
+const REFRESH_EXPIRES_IN = "7d";
 
 // email: grigory@example.com | password: grigory123
 let users = [
@@ -21,11 +27,15 @@ let users = [
     email: "grigory@example.com",
     first_name: "Григорий",
     last_name: "Костин",
-    passwordHash: "$2b$10$akAt3HLdpFiBHxvmsLOcYuYY38ixwzhZrAOBqnscRQTVqSatE20XC",
+    passwordHash:
+      "$2b$10$akAt3HLdpFiBHxvmsLOcYuYY38ixwzhZrAOBqnscRQTVqSatE20XC",
   },
 ];
 
 let products = [];
+
+// Хранилище refresh-токенов в памяти
+const refreshTokens = new Set();
 
 const serverUrl = process.env.CODESPACE_NAME
   ? `https://${process.env.CODESPACE_NAME}-${PORT}.app.github.dev`
@@ -37,12 +47,22 @@ const swaggerOptions = {
     info: {
       title: "API Auth + Products",
       version: "1.0.0",
-      description: "Практические занятия 7-8: bcrypt + JWT + CRUD товаров. Логин: grigory@example.com / grigory123",
+      description:
+        "Практические занятия 7-9: bcrypt + JWT + refresh token + CRUD товаров.\nЛогин: grigory@example.com / grigory123",
     },
     servers: [{ url: serverUrl }],
     components: {
       securitySchemes: {
-        bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT",
+        },
+        refreshTokenHeader: {
+          type: "apiKey",
+          in: "header",
+          name: "x-refresh-token",
+        },
       },
     },
   },
@@ -50,29 +70,60 @@ const swaggerOptions = {
 };
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
+
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-app.use(express.json());
 
 app.use((req, res, next) => {
   res.on("finish", () => {
-    console.log(`[${new Date().toISOString()}] [${req.method}] ${res.statusCode} ${req.path}`);
+    console.log(
+      `[${new Date().toISOString()}] [${req.method}] ${res.statusCode} ${req.path}`
+    );
+
     if (["POST", "PUT", "PATCH"].includes(req.method)) {
       const body = { ...req.body };
       if (body.password) body.password = "***";
+      if (body.refreshToken) body.refreshToken = "***";
       console.log("Body:", body);
     }
   });
+
   next();
 });
+
+function generateAccessToken(user) {
+  return jwt.sign(
+    {
+      sub: user.id,
+      email: user.email,
+    },
+    ACCESS_SECRET,
+    { expiresIn: ACCESS_EXPIRES_IN }
+  );
+}
+
+function generateRefreshToken(user) {
+  return jwt.sign(
+    {
+      sub: user.id,
+      email: user.email,
+    },
+    REFRESH_SECRET,
+    { expiresIn: REFRESH_EXPIRES_IN }
+  );
+}
 
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization || "";
   const [scheme, token] = header.split(" ");
+
   if (scheme !== "Bearer" || !token) {
-    return res.status(401).json({ error: "Missing or invalid Authorization header" });
+    return res
+      .status(401)
+      .json({ error: "Missing or invalid Authorization header" });
   }
+
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, ACCESS_SECRET);
     req.user = payload;
     next();
   } catch {
@@ -86,10 +137,12 @@ async function verifyPassword(password, hash) {
 
 function findProductOr404(id, res) {
   const product = products.find((p) => p.id === id);
+
   if (!product) {
     res.status(404).json({ error: "Product not found" });
     return null;
   }
+
   return product;
 }
 
@@ -124,13 +177,15 @@ function findProductOr404(id, res) {
  *                 example: grigory123
  *     responses:
  *       200:
- *         description: Успешный вход, возвращает accessToken
+ *         description: Успешный вход, возвращает accessToken и refreshToken
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
  *                 accessToken:
+ *                   type: string
+ *                 refreshToken:
  *                   type: string
  *       400:
  *         description: Отсутствуют обязательные поля
@@ -139,23 +194,103 @@ function findProductOr404(id, res) {
  */
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
+
   if (!email || !password) {
     return res.status(400).json({ error: "email and password are required" });
   }
+
   const user = users.find((u) => u.email === email);
+
   if (!user) {
     return res.status(401).json({ error: "Invalid credentials" });
   }
+
   const isValid = await verifyPassword(password, user.passwordHash);
+
   if (!isValid) {
     return res.status(401).json({ error: "Invalid credentials" });
   }
-  const accessToken = jwt.sign(
-    { sub: user.id, email: user.email },
-    JWT_SECRET,
-    { expiresIn: ACCESS_EXPIRES_IN }
-  );
-  res.json({ accessToken });
+
+  const accessToken = generateAccessToken(user);
+  const refreshToken = generateRefreshToken(user);
+
+  refreshTokens.add(refreshToken);
+
+  res.json({
+    accessToken,
+    refreshToken,
+  });
+});
+
+/**
+ * @swagger
+ * /api/auth/refresh:
+ *   post:
+ *     summary: Обновить accessToken и refreshToken
+ *     tags: [Auth]
+ *     security:
+ *       - refreshTokenHeader: []
+ *     parameters:
+ *       - in: header
+ *         name: x-refresh-token
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Refresh-токен
+ *     responses:
+ *       200:
+ *         description: Новая пара токенов
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 accessToken:
+ *                   type: string
+ *                 refreshToken:
+ *                   type: string
+ *       400:
+ *         description: Refresh-токен не передан
+ *       401:
+ *         description: Невалидный или истёкший refresh-токен
+ */
+app.post("/api/auth/refresh", (req, res) => {
+  const refreshToken =
+    req.headers["x-refresh-token"] || req.headers["refresh-token"];
+
+  if (!refreshToken) {
+    return res.status(400).json({ error: "refresh token is required in headers" });
+  }
+
+  if (!refreshTokens.has(refreshToken)) {
+    return res.status(401).json({ error: "Invalid refresh token" });
+  }
+
+  try {
+    const payload = jwt.verify(refreshToken, REFRESH_SECRET);
+    const user = users.find((u) => u.id === payload.sub);
+
+    if (!user) {
+      refreshTokens.delete(refreshToken);
+      return res.status(401).json({ error: "User not found" });
+    }
+
+    // Ротация refresh-токена
+    refreshTokens.delete(refreshToken);
+
+    const newAccessToken = generateAccessToken(user);
+    const newRefreshToken = generateRefreshToken(user);
+
+    refreshTokens.add(newRefreshToken);
+
+    res.json({
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    });
+  } catch {
+    refreshTokens.delete(refreshToken);
+    return res.status(401).json({ error: "Invalid or expired refresh token" });
+  }
 });
 
 /**
@@ -189,8 +324,17 @@ app.post("/api/auth/login", async (req, res) => {
  */
 app.get("/api/auth/me", authMiddleware, (req, res) => {
   const user = users.find((u) => u.id === req.user.sub);
-  if (!user) return res.status(404).json({ error: "User not found" });
-  res.json({ id: user.id, email: user.email, first_name: user.first_name, last_name: user.last_name });
+
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  res.json({
+    id: user.id,
+    email: user.email,
+    first_name: user.first_name,
+    last_name: user.last_name,
+  });
 });
 
 /**
@@ -227,14 +371,29 @@ app.get("/api/auth/me", authMiddleware, (req, res) => {
  */
 app.post("/api/products", (req, res) => {
   const { title, category, description, price } = req.body;
+
   if (!title || !category || !description || price === undefined) {
-    return res.status(400).json({ error: "title, category, description and price are required" });
+    return res.status(400).json({
+      error: "title, category, description and price are required",
+    });
   }
+
   if (typeof price !== "number" || price < 0) {
-    return res.status(400).json({ error: "price must be a non-negative number" });
+    return res.status(400).json({
+      error: "price must be a non-negative number",
+    });
   }
-  const product = { id: nanoid(8), title, category, description, price };
+
+  const product = {
+    id: nanoid(8),
+    title,
+    category,
+    description,
+    price,
+  };
+
   products.push(product);
+
   res.status(201).json(product);
 });
 
@@ -277,6 +436,7 @@ app.get("/api/products", (req, res) => {
 app.get("/api/products/:id", authMiddleware, (req, res) => {
   const product = findProductOr404(req.params.id, res);
   if (!product) return;
+
   res.json(product);
 });
 
@@ -320,16 +480,23 @@ app.get("/api/products/:id", authMiddleware, (req, res) => {
 app.put("/api/products/:id", authMiddleware, (req, res) => {
   const product = findProductOr404(req.params.id, res);
   if (!product) return;
+
   const { title, category, description, price } = req.body;
+
   if (title !== undefined) product.title = title;
   if (category !== undefined) product.category = category;
   if (description !== undefined) product.description = description;
+
   if (price !== undefined) {
     if (typeof price !== "number" || price < 0) {
-      return res.status(400).json({ error: "price must be a non-negative number" });
+      return res.status(400).json({
+        error: "price must be a non-negative number",
+      });
     }
+
     product.price = price;
   }
+
   res.json(product);
 });
 
@@ -357,9 +524,17 @@ app.put("/api/products/:id", authMiddleware, (req, res) => {
  */
 app.delete("/api/products/:id", authMiddleware, (req, res) => {
   const idx = products.findIndex((p) => p.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "Product not found" });
+
+  if (idx === -1) {
+    return res.status(404).json({ error: "Product not found" });
+  }
+
   const deleted = products.splice(idx, 1)[0];
-  res.json({ message: "Product deleted", product: deleted });
+
+  res.json({
+    message: "Product deleted",
+    product: deleted,
+  });
 });
 
 app.listen(PORT, () => {
