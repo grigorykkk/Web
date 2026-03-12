@@ -9,16 +9,8 @@ const emptyProductForm = {
 };
 
 export default function App() {
-  const [mode, setMode] = useState("login");
   const [user, setUser] = useState(null);
   const [message, setMessage] = useState("");
-
-  const [registerForm, setRegisterForm] = useState({
-    email: "",
-    password: "",
-    first_name: "",
-    last_name: "",
-  });
 
   const [loginForm, setLoginForm] = useState({
     email: "",
@@ -48,6 +40,8 @@ export default function App() {
       setUser(response.data);
     } catch (error) {
       setUser(null);
+      localStorage.removeItem("accessToken");
+      localStorage.removeItem("refreshToken");
     }
   }
 
@@ -57,25 +51,6 @@ export default function App() {
       setProducts(response.data);
     } catch (error) {
       setProducts([]);
-    }
-  }
-
-  async function handleRegister(e) {
-    e.preventDefault();
-    setMessage("");
-
-    try {
-      await api.register(registerForm);
-      setMessage("Регистрация успешна. Теперь войдите в систему.");
-      setMode("login");
-      setRegisterForm({
-        email: "",
-        password: "",
-        first_name: "",
-        last_name: "",
-      });
-    } catch (error) {
-      setMessage(error.response?.data?.error || "Ошибка регистрации");
     }
   }
 
@@ -184,98 +159,36 @@ export default function App() {
     return (
       <div className="page">
         <h1>Практика 10</h1>
-        <p className="hint">
-          Frontend + backend + JWT + refresh token + axios interceptors
-        </p>
-
-        <div className="tabs">
-          <button
-            className={mode === "login" ? "active" : ""}
-            onClick={() => setMode("login")}
-          >
-            Вход
-          </button>
-          <button
-            className={mode === "register" ? "active" : ""}
-            onClick={() => setMode("register")}
-          >
-            Регистрация
-          </button>
-        </div>
 
         {message && <div className="message">{message}</div>}
 
-        {mode === "login" ? (
-          <form className="card" onSubmit={handleLogin}>
-            <h2>Вход</h2>
+        <form className="card" onSubmit={handleLogin}>
+          <h2>Вход</h2>
 
-            <input
-              type="email"
-              placeholder="Email"
-              value={loginForm.email}
-              onChange={(e) =>
-                setLoginForm({ ...loginForm, email: e.target.value })
-              }
-            />
+          <input
+            type="email"
+            placeholder="Email"
+            value={loginForm.email}
+            onChange={(e) =>
+              setLoginForm({ ...loginForm, email: e.target.value })
+            }
+          />
 
-            <input
-              type="password"
-              placeholder="Пароль"
-              value={loginForm.password}
-              onChange={(e) =>
-                setLoginForm({ ...loginForm, password: e.target.value })
-              }
-            />
+          <input
+            type="password"
+            placeholder="Пароль"
+            value={loginForm.password}
+            onChange={(e) =>
+              setLoginForm({ ...loginForm, password: e.target.value })
+            }
+          />
 
-            <button type="submit">Войти</button>
+          <button type="submit">Войти</button>
 
-            <div className="demo">
-              Тестовый вход: grigory@example.com / grigory123
-            </div>
-          </form>
-        ) : (
-          <form className="card" onSubmit={handleRegister}>
-            <h2>Регистрация</h2>
-
-            <input
-              type="text"
-              placeholder="Имя"
-              value={registerForm.first_name}
-              onChange={(e) =>
-                setRegisterForm({ ...registerForm, first_name: e.target.value })
-              }
-            />
-
-            <input
-              type="text"
-              placeholder="Фамилия"
-              value={registerForm.last_name}
-              onChange={(e) =>
-                setRegisterForm({ ...registerForm, last_name: e.target.value })
-              }
-            />
-
-            <input
-              type="email"
-              placeholder="Email"
-              value={registerForm.email}
-              onChange={(e) =>
-                setRegisterForm({ ...registerForm, email: e.target.value })
-              }
-            />
-
-            <input
-              type="password"
-              placeholder="Пароль"
-              value={registerForm.password}
-              onChange={(e) =>
-                setRegisterForm({ ...registerForm, password: e.target.value })
-              }
-            />
-
-            <button type="submit">Зарегистрироваться</button>
-          </form>
-        )}
+          <div className="demo">
+            Тестовый вход: grigory@example.com / grigory123
+          </div>
+        </form>
       </div>
     );
   }
