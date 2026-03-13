@@ -1,6 +1,19 @@
 import axios from "axios";
 
+const ACCESS_TOKEN_KEY = "accessToken";
+const REFRESH_TOKEN_KEY = "refreshToken";
+const SESSION_EXPIRED_MESSAGE = "Сессия истекла. Войдите снова.";
+const AUTH_REFRESH_EXCLUDED_URLS = new Set([
+  "/auth/login",
+  "/auth/register",
+  "/auth/refresh",
+]);
+
 function resolveApiBaseUrl() {
+  if (import.meta.env.DEV) {
+    return "/api";
+  }
+
   if (import.meta.env.VITE_API_URL) {
     return import.meta.env.VITE_API_URL;
   }
@@ -25,6 +38,180 @@ function resolveApiBaseUrl() {
   return `${protocol}//${hostname}/api`;
 }
 
+function parseJwtPayload(token) {
+  if (typeof token !== "string") {
+    return null;
+  }
+
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    return null;
+  }
+
+  try {
+    const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return JSON.parse(atob(padded));
+  } catch (error) {
+    return null;
+  }
+}
+
+function getTokenExpiryMs(token) {
+  const payload = parseJwtPayload(token);
+
+  if (!payload || typeof payload.exp !== "number") {
+    return null;
+  }
+
+  return payload.exp * 1000;
+}
+
+function getStoredTokens() {
+  return {
+    accessToken: localStorage.getItem(ACCESS_TOKEN_KEY),
+    refreshToken: localStorage.getItem(REFRESH_TOKEN_KEY),
+  };
+}
+
+function clearStoredTokens() {
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+const sessionListeners = new Set();
+let logoutTimerId = null;
+let refreshPromise = null;
+
+function emitSessionEvent(event) {
+  sessionListeners.forEach((listener) => listener(event));
+}
+
+function clearLogoutTimer() {
+  if (logoutTimerId !== null) {
+    window.clearTimeout(logoutTimerId);
+    logoutTimerId = null;
+  }
+}
+
+function clearSession({ reason = "logout", message = "", notify = true } = {}) {
+  const { accessToken, refreshToken } = getStoredTokens();
+  const hadSession = Boolean(accessToken || refreshToken || logoutTimerId !== null);
+
+  clearLogoutTimer();
+  clearStoredTokens();
+  refreshPromise = null;
+
+  if (notify && (hadSession || reason === "logout")) {
+    emitSessionEvent({ reason, message });
+  }
+}
+
+function scheduleSessionExpiry(accessToken, refreshToken) {
+  const accessExpiryMs = getTokenExpiryMs(accessToken);
+  const refreshExpiryMs = getTokenExpiryMs(refreshToken);
+
+  if (!accessExpiryMs || !refreshExpiryMs) {
+    clearSession({
+      reason: "invalid",
+      message: SESSION_EXPIRED_MESSAGE,
+    });
+    return false;
+  }
+
+  const expiresAt = Math.min(accessExpiryMs, refreshExpiryMs);
+  const delayMs = expiresAt - Date.now();
+
+  if (delayMs <= 0) {
+    clearSession({
+      reason: "expired",
+      message: SESSION_EXPIRED_MESSAGE,
+    });
+    return false;
+  }
+
+  clearLogoutTimer();
+  logoutTimerId = window.setTimeout(() => {
+    clearSession({
+      reason: "expired",
+      message: SESSION_EXPIRED_MESSAGE,
+    });
+  }, delayMs);
+
+  return true;
+}
+
+function shouldSkipAuthToken(config) {
+  return Boolean(config?.skipAuthToken);
+}
+
+function shouldSkipAuthRefresh(config) {
+  return Boolean(
+    config?.skipAuthRefresh ||
+      AUTH_REFRESH_EXCLUDED_URLS.has(config?.url || "")
+  );
+}
+
+export const session = {
+  initialize() {
+    const { accessToken, refreshToken } = getStoredTokens();
+
+    if (!accessToken || !refreshToken) {
+      clearLogoutTimer();
+      return false;
+    }
+
+    return scheduleSessionExpiry(accessToken, refreshToken);
+  },
+
+  hasSession() {
+    const { accessToken, refreshToken } = getStoredTokens();
+    return Boolean(accessToken && refreshToken);
+  },
+
+  saveTokens({ accessToken, refreshToken }) {
+    if (!accessToken || !refreshToken) {
+      clearSession({
+        reason: "invalid",
+        message: SESSION_EXPIRED_MESSAGE,
+      });
+      return false;
+    }
+
+    localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
+    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+
+    return scheduleSessionExpiry(accessToken, refreshToken);
+  },
+
+  clear(options) {
+    clearSession(options);
+  },
+
+  logout(message = "Вы вышли из системы") {
+    clearSession({
+      reason: "logout",
+      message,
+    });
+  },
+
+  subscribe(listener) {
+    sessionListeners.add(listener);
+
+    return () => {
+      sessionListeners.delete(listener);
+    };
+  },
+
+  getAccessToken() {
+    return getStoredTokens().accessToken;
+  },
+
+  getRefreshToken() {
+    return getStoredTokens().refreshToken;
+  },
+};
+
 const apiClient = axios.create({
   baseURL: resolveApiBaseUrl(),
   headers: {
@@ -35,7 +222,14 @@ const apiClient = axios.create({
 
 apiClient.interceptors.request.use(
   (config) => {
-    const accessToken = localStorage.getItem("accessToken");
+    config.headers = config.headers || {};
+
+    if (shouldSkipAuthToken(config)) {
+      delete config.headers.Authorization;
+      return config;
+    }
+
+    const accessToken = session.getAccessToken();
 
     if (accessToken) {
       config.headers.Authorization = `Bearer ${accessToken}`;
@@ -48,11 +242,17 @@ apiClient.interceptors.request.use(
 
 const api = {
   register(data) {
-    return apiClient.post("/auth/register", data);
+    return apiClient.post("/auth/register", data, {
+      skipAuthToken: true,
+      skipAuthRefresh: true,
+    });
   },
 
   login(data) {
-    return apiClient.post("/auth/login", data);
+    return apiClient.post("/auth/login", data, {
+      skipAuthToken: true,
+      skipAuthRefresh: true,
+    });
   },
 
   me() {
@@ -67,6 +267,8 @@ const api = {
         headers: {
           "x-refresh-token": refreshToken,
         },
+        skipAuthToken: true,
+        skipAuthRefresh: true,
       }
     );
   },
@@ -96,51 +298,58 @@ apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    const accessToken = localStorage.getItem("accessToken");
-    const refreshToken = localStorage.getItem("refreshToken");
 
     if (
-      error.response &&
-      error.response.status === 401 &&
-      originalRequest &&
-      !originalRequest._retry
+      !error.response ||
+      error.response.status !== 401 ||
+      !originalRequest ||
+      originalRequest._retry ||
+      shouldSkipAuthRefresh(originalRequest)
     ) {
-      originalRequest._retry = true;
+      return Promise.reject(error);
+    }
 
-      if (!accessToken || !refreshToken) {
-        localStorage.removeItem("accessToken");
-        localStorage.removeItem("refreshToken");
+    const refreshToken = session.getRefreshToken();
+    if (!refreshToken) {
+      clearSession({
+        reason: "expired",
+        message: SESSION_EXPIRED_MESSAGE,
+      });
+      return Promise.reject(error);
+    }
+
+    originalRequest._retry = true;
+
+    try {
+      if (!refreshPromise) {
+        refreshPromise = api.refresh(refreshToken).finally(() => {
+          refreshPromise = null;
+        });
+      }
+
+      const response = await refreshPromise;
+      const newAccessToken = response.data?.accessToken;
+      const newRefreshToken = response.data?.refreshToken;
+      const saved = session.saveTokens({
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+      });
+
+      if (!saved) {
         return Promise.reject(error);
       }
 
-      try {
-        const response = await api.refresh(refreshToken);
-        const isRefreshExpired = response.data.refresh_expired;
+      originalRequest.headers = originalRequest.headers || {};
+      originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
 
-        if (isRefreshExpired) {
-          localStorage.removeItem("accessToken");
-          localStorage.removeItem("refreshToken");
-          return Promise.reject(error);
-        }
-
-        const newAccessToken = response.data.accessToken;
-        const newRefreshToken = response.data.refreshToken;
-
-        localStorage.setItem("accessToken", newAccessToken);
-        localStorage.setItem("refreshToken", newRefreshToken);
-
-        originalRequest.headers = originalRequest.headers || {};
-        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
-
-        return apiClient(originalRequest);
-      } catch (refreshError) {
-        localStorage.removeItem("accessToken");
-        localStorage.removeItem("refreshToken");
-        return Promise.reject(refreshError);
-      }
+      return apiClient(originalRequest);
+    } catch (refreshError) {
+      clearSession({
+        reason: "expired",
+        message: SESSION_EXPIRED_MESSAGE,
+      });
+      return Promise.reject(refreshError);
     }
-
-    return Promise.reject(error);
   }
 );
 

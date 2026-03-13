@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import api from "./api";
+import api, { session } from "./api";
 
 const emptyProductForm = {
   title: "",
@@ -7,6 +7,10 @@ const emptyProductForm = {
   description: "",
   price: "",
 };
+
+function getErrorMessage(error, fallbackMessage) {
+  return error.response?.data?.error || error.message || fallbackMessage;
+}
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -26,22 +30,47 @@ export default function App() {
   const [editForm, setEditForm] = useState(emptyProductForm);
   const [deleteId, setDeleteId] = useState("");
 
+  function resetProtectedState() {
+    setUser(null);
+    setProducts([]);
+    setSelectedProductId("");
+    setSelectedProduct(null);
+    setCreateForm(emptyProductForm);
+    setEditId("");
+    setEditForm(emptyProductForm);
+    setDeleteId("");
+  }
+
   useEffect(() => {
-    const token = localStorage.getItem("accessToken");
-    if (token) {
-      loadMe();
-      loadProducts();
+    const unsubscribe = session.subscribe((event) => {
+      resetProtectedState();
+      setMessage(event.message || "");
+    });
+
+    if (session.initialize()) {
+      void restoreSession();
     }
+
+    return unsubscribe;
   }, []);
 
   async function loadMe() {
     try {
       const response = await api.me();
       setUser(response.data);
+      return response.data;
     } catch (error) {
-      setUser(null);
-      localStorage.removeItem("accessToken");
-      localStorage.removeItem("refreshToken");
+      if (session.hasSession()) {
+        session.clear({
+          reason: "invalid",
+          message: getErrorMessage(
+            error,
+            "Не удалось загрузить пользователя"
+          ),
+        });
+      }
+
+      return null;
     }
   }
 
@@ -49,9 +78,25 @@ export default function App() {
     try {
       const response = await api.getProducts();
       setProducts(response.data);
+      return response.data;
     } catch (error) {
+      if (!session.hasSession()) {
+        return null;
+      }
+
       setProducts([]);
+      setMessage(getErrorMessage(error, "Не удалось загрузить список товаров"));
+      return null;
     }
+  }
+
+  async function restoreSession() {
+    const currentUser = await loadMe();
+    if (!currentUser) {
+      return;
+    }
+
+    await loadProducts();
   }
 
   async function handleLogin(e) {
@@ -60,32 +105,40 @@ export default function App() {
 
     try {
       const response = await api.login(loginForm);
+      const saved = session.saveTokens({
+        accessToken: response.data.accessToken,
+        refreshToken: response.data.refreshToken,
+      });
 
-      localStorage.setItem("accessToken", response.data.accessToken);
-      localStorage.setItem("refreshToken", response.data.refreshToken);
+      if (!saved) {
+        return;
+      }
 
-      await loadMe();
-      await loadProducts();
+      const currentUser = await loadMe();
+      if (!currentUser) {
+        return;
+      }
+
+      const loadedProducts = await loadProducts();
+      if (!session.hasSession()) {
+        return;
+      }
 
       setLoginForm({
         email: "",
         password: "",
       });
 
-      setMessage("Вход выполнен");
+      setMessage(
+        loadedProducts ? "Вход выполнен" : "Вход выполнен, но товары не загружены"
+      );
     } catch (error) {
-      setMessage(error.response?.data?.error || "Ошибка входа");
+      setMessage(getErrorMessage(error, "Ошибка входа"));
     }
   }
 
   function handleLogout() {
-    localStorage.removeItem("accessToken");
-    localStorage.removeItem("refreshToken");
-    setUser(null);
-    setProducts([]);
-    setSelectedProduct(null);
-    setSelectedProductId("");
-    setMessage("Вы вышли из системы");
+    session.logout();
   }
 
   async function handleCreateProduct(e) {
@@ -100,9 +153,17 @@ export default function App() {
 
       setCreateForm(emptyProductForm);
       await loadProducts();
+      if (!session.hasSession()) {
+        return;
+      }
+
       setMessage("Товар создан");
     } catch (error) {
-      setMessage(error.response?.data?.error || "Ошибка создания товара");
+      if (!session.hasSession()) {
+        return;
+      }
+
+      setMessage(getErrorMessage(error, "Ошибка создания товара"));
     }
   }
 
@@ -115,8 +176,12 @@ export default function App() {
       setSelectedProduct(response.data);
       setMessage("Товар найден");
     } catch (error) {
+      if (!session.hasSession()) {
+        return;
+      }
+
       setSelectedProduct(null);
-      setMessage(error.response?.data?.error || "Ошибка получения товара");
+      setMessage(getErrorMessage(error, "Ошибка получения товара"));
     }
   }
 
@@ -135,9 +200,17 @@ export default function App() {
       setEditId("");
       setEditForm(emptyProductForm);
       await loadProducts();
+      if (!session.hasSession()) {
+        return;
+      }
+
       setMessage("Товар обновлён");
     } catch (error) {
-      setMessage(error.response?.data?.error || "Ошибка обновления товара");
+      if (!session.hasSession()) {
+        return;
+      }
+
+      setMessage(getErrorMessage(error, "Ошибка обновления товара"));
     }
   }
 
@@ -149,9 +222,17 @@ export default function App() {
       await api.deleteProduct(deleteId);
       setDeleteId("");
       await loadProducts();
+      if (!session.hasSession()) {
+        return;
+      }
+
       setMessage("Товар удалён");
     } catch (error) {
-      setMessage(error.response?.data?.error || "Ошибка удаления товара");
+      if (!session.hasSession()) {
+        return;
+      }
+
+      setMessage(getErrorMessage(error, "Ошибка удаления товара"));
     }
   }
 
@@ -199,7 +280,8 @@ export default function App() {
         <div>
           <h1>Практика 10</h1>
           <p>
-            Пользователь: <strong>{user.first_name} {user.last_name}</strong> ({user.email})
+            Пользователь: <strong>{user.first_name} {user.last_name}</strong> (
+            {user.email})
           </p>
         </div>
         <button onClick={handleLogout}>Выйти</button>

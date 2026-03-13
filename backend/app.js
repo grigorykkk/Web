@@ -44,11 +44,19 @@ app.use(
 
 app.use(express.json());
 
+app.use((error, req, res, next) => {
+  if (error instanceof SyntaxError && error.status === 400 && "body" in error) {
+    return res.status(400).json({ error: "Invalid JSON body" });
+  }
+
+  return next(error);
+});
+
 const ACCESS_SECRET = "access_secret_key_change_me";
 const REFRESH_SECRET = "refresh_secret_key_change_me";
 
-const ACCESS_EXPIRES_IN = "15m";
-const REFRESH_EXPIRES_IN = "7d";
+const ACCESS_EXPIRES_IN = "30s";
+const REFRESH_EXPIRES_IN = "30s";
 
 // Тестовый пользователь
 // email: grigory@example.com
@@ -98,6 +106,7 @@ function generateRefreshToken(user) {
     {
       sub: user.id,
       email: user.email,
+      jti: nanoid(12),
     },
     REFRESH_SECRET,
     { expiresIn: REFRESH_EXPIRES_IN }
@@ -127,8 +136,22 @@ function getRefreshTokenFromHeaders(req) {
   return req.headers["x-refresh-token"] || req.headers["refresh-token"];
 }
 
+function getJsonBody(req, res) {
+  if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+    res.status(400).json({ error: "Request body must be a JSON object" });
+    return null;
+  }
+
+  return req.body;
+}
+
 app.post("/api/auth/register", async (req, res) => {
-  const { email, password, first_name, last_name } = req.body;
+  const body = getJsonBody(req, res);
+  if (!body) {
+    return;
+  }
+
+  const { email, password, first_name, last_name } = body;
 
   if (!email || !password || !first_name || !last_name) {
     return res.status(400).json({
@@ -162,7 +185,12 @@ app.post("/api/auth/register", async (req, res) => {
 });
 
 app.post("/api/auth/login", async (req, res) => {
-  const { email, password } = req.body;
+  const body = getJsonBody(req, res);
+  if (!body) {
+    return;
+  }
+
+  const { email, password } = body;
 
   if (!email || !password) {
     return res.status(400).json({
@@ -194,15 +222,16 @@ app.post("/api/auth/login", async (req, res) => {
 app.post("/api/auth/refresh", (req, res) => {
   const refreshToken = getRefreshTokenFromHeaders(req);
 
-  if (!refreshToken) {
-    return res.status(400).json({
-      error: "refresh token is required in headers",
+  if (!refreshToken || typeof refreshToken !== "string") {
+    return res.status(401).json({
+      error: "Invalid or expired refresh token",
+      refresh_expired: true,
     });
   }
 
   if (!refreshTokens.has(refreshToken)) {
     return res.status(401).json({
-      error: "Invalid refresh token",
+      error: "Invalid or expired refresh token",
       refresh_expired: true,
     });
   }
@@ -214,7 +243,7 @@ app.post("/api/auth/refresh", (req, res) => {
     if (!user) {
       refreshTokens.delete(refreshToken);
       return res.status(401).json({
-        error: "User not found",
+        error: "Invalid or expired refresh token",
         refresh_expired: true,
       });
     }
@@ -256,7 +285,12 @@ app.get("/api/auth/me", authMiddleware, (req, res) => {
 });
 
 app.post("/api/products", authMiddleware, (req, res) => {
-  const { title, category, description, price } = req.body;
+  const body = getJsonBody(req, res);
+  if (!body) {
+    return;
+  }
+
+  const { title, category, description, price } = body;
 
   if (!title || !category || !description || price === undefined) {
     return res.status(400).json({
@@ -303,7 +337,12 @@ app.put("/api/products/:id", authMiddleware, (req, res) => {
     return res.status(404).json({ error: "Product not found" });
   }
 
-  const { title, category, description, price } = req.body;
+  const body = getJsonBody(req, res);
+  if (!body) {
+    return;
+  }
+
+  const { title, category, description, price } = body;
 
   if (title !== undefined) product.title = title;
   if (category !== undefined) product.category = category;
