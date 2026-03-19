@@ -262,15 +262,28 @@ const api = {
   refresh(refreshToken) {
     return apiClient.post(
       "/auth/refresh",
-      {},
+      { refreshToken },
       {
-        headers: {
-          "x-refresh-token": refreshToken,
-        },
         skipAuthToken: true,
         skipAuthRefresh: true,
       }
     );
+  },
+
+  getUsers() {
+    return apiClient.get("/users");
+  },
+
+  getUserById(id) {
+    return apiClient.get(`/users/${id}`);
+  },
+
+  updateUser(id, data) {
+    return apiClient.put(`/users/${id}`, data);
+  },
+
+  blockUser(id) {
+    return apiClient.delete(`/users/${id}`);
   },
 
   getProducts() {

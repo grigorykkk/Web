@@ -8,6 +8,18 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
+const ROLES = {
+  USER: "user",
+  SELLER: "seller",
+  ADMIN: "admin",
+};
+
+const ACCESS_SECRET = "access_secret_key_change_me";
+const REFRESH_SECRET = "refresh_secret_key_change_me";
+
+const ACCESS_EXPIRES_IN = "15m";
+const REFRESH_EXPIRES_IN = "7d";
+
 function isAllowedOrigin(origin) {
   if (!origin) return true;
 
@@ -52,22 +64,44 @@ app.use((error, req, res, next) => {
   return next(error);
 });
 
-const ACCESS_SECRET = "access_secret_key_change_me";
-const REFRESH_SECRET = "refresh_secret_key_change_me";
+function sanitizeUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    role: user.role,
+    blocked: user.blocked,
+  };
+}
 
-const ACCESS_EXPIRES_IN = "30s";
-const REFRESH_EXPIRES_IN = "30s";
-
-// Тестовый пользователь
-// email: grigory@example.com
-// password: grigory123
-let users = [
+const users = [
   {
-    id: "usr_grigory",
-    email: "grigory@example.com",
-    first_name: "Григорий",
-    last_name: "Костин",
-    passwordHash: bcrypt.hashSync("grigory123", 10),
+    id: "usr_admin",
+    email: "admin@example.com",
+    first_name: "Админ",
+    last_name: "Системный",
+    role: ROLES.ADMIN,
+    blocked: false,
+    passwordHash: bcrypt.hashSync("admin123", 10),
+  },
+  {
+    id: "usr_seller",
+    email: "seller@example.com",
+    first_name: "Ирина",
+    last_name: "Продавец",
+    role: ROLES.SELLER,
+    blocked: false,
+    passwordHash: bcrypt.hashSync("seller123", 10),
+  },
+  {
+    id: "usr_user",
+    email: "user@example.com",
+    first_name: "Павел",
+    last_name: "Покупатель",
+    role: ROLES.USER,
+    blocked: false,
+    passwordHash: bcrypt.hashSync("user123", 10),
   },
 ];
 
@@ -95,6 +129,7 @@ function generateAccessToken(user) {
     {
       sub: user.id,
       email: user.email,
+      role: user.role,
     },
     ACCESS_SECRET,
     { expiresIn: ACCESS_EXPIRES_IN }
@@ -106,11 +141,21 @@ function generateRefreshToken(user) {
     {
       sub: user.id,
       email: user.email,
+      role: user.role,
       jti: nanoid(12),
     },
     REFRESH_SECRET,
     { expiresIn: REFRESH_EXPIRES_IN }
   );
+}
+
+function revokeRefreshTokensForUser(userId) {
+  Array.from(refreshTokens).forEach((token) => {
+    const payload = jwt.decode(token);
+    if (payload?.sub === userId) {
+      refreshTokens.delete(token);
+    }
+  });
 }
 
 function authMiddleware(req, res, next) {
@@ -125,15 +170,48 @@ function authMiddleware(req, res, next) {
 
   try {
     const payload = jwt.verify(token, ACCESS_SECRET);
-    req.user = payload;
-    next();
+    const user = users.find((item) => item.id === payload.sub);
+
+    if (!user) {
+      return res.status(401).json({ error: "User not found" });
+    }
+
+    if (user.blocked) {
+      return res.status(403).json({ error: "User is blocked" });
+    }
+
+    req.user = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    };
+    req.currentUser = user;
+
+    return next();
   } catch (error) {
     return res.status(401).json({ error: "Invalid or expired access token" });
   }
 }
 
-function getRefreshTokenFromHeaders(req) {
-  return req.headers["x-refresh-token"] || req.headers["refresh-token"];
+function roleMiddleware(allowedRoles) {
+  return (req, res, next) => {
+    if (!req.user || !allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    return next();
+  };
+}
+
+function getRefreshToken(req) {
+  const headerToken =
+    req.headers["x-refresh-token"] || req.headers["refresh-token"];
+
+  if (typeof req.body?.refreshToken === "string") {
+    return req.body.refreshToken;
+  }
+
+  return headerToken;
 }
 
 function getJsonBody(req, res) {
@@ -143,6 +221,10 @@ function getJsonBody(req, res) {
   }
 
   return req.body;
+}
+
+function isValidRole(role) {
+  return Object.values(ROLES).includes(role);
 }
 
 app.post("/api/auth/register", async (req, res) => {
@@ -159,7 +241,7 @@ app.post("/api/auth/register", async (req, res) => {
     });
   }
 
-  const exists = users.some((u) => u.email === email);
+  const exists = users.some((user) => user.email === email);
   if (exists) {
     return res.status(409).json({ error: "User already exists" });
   }
@@ -171,17 +253,14 @@ app.post("/api/auth/register", async (req, res) => {
     email,
     first_name,
     last_name,
+    role: ROLES.USER,
+    blocked: false,
     passwordHash,
   };
 
   users.push(user);
 
-  res.status(201).json({
-    id: user.id,
-    email: user.email,
-    first_name: user.first_name,
-    last_name: user.last_name,
-  });
+  return res.status(201).json(sanitizeUser(user));
 });
 
 app.post("/api/auth/login", async (req, res) => {
@@ -198,9 +277,13 @@ app.post("/api/auth/login", async (req, res) => {
     });
   }
 
-  const user = users.find((u) => u.email === email);
+  const user = users.find((item) => item.email === email);
   if (!user) {
     return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  if (user.blocked) {
+    return res.status(403).json({ error: "User is blocked" });
   }
 
   const isValid = await bcrypt.compare(password, user.passwordHash);
@@ -213,18 +296,18 @@ app.post("/api/auth/login", async (req, res) => {
 
   refreshTokens.add(refreshToken);
 
-  res.json({
+  return res.json({
     accessToken,
     refreshToken,
   });
 });
 
 app.post("/api/auth/refresh", (req, res) => {
-  const refreshToken = getRefreshTokenFromHeaders(req);
+  const refreshToken = getRefreshToken(req);
 
   if (!refreshToken || typeof refreshToken !== "string") {
-    return res.status(401).json({
-      error: "Invalid or expired refresh token",
+    return res.status(400).json({
+      error: "refreshToken is required",
       refresh_expired: true,
     });
   }
@@ -238,9 +321,9 @@ app.post("/api/auth/refresh", (req, res) => {
 
   try {
     const payload = jwt.verify(refreshToken, REFRESH_SECRET);
-    const user = users.find((u) => u.id === payload.sub);
+    const user = users.find((item) => item.id === payload.sub);
 
-    if (!user) {
+    if (!user || user.blocked) {
       refreshTokens.delete(refreshToken);
       return res.status(401).json({
         error: "Invalid or expired refresh token",
@@ -269,112 +352,254 @@ app.post("/api/auth/refresh", (req, res) => {
   }
 });
 
-app.get("/api/auth/me", authMiddleware, (req, res) => {
-  const user = users.find((u) => u.id === req.user.sub);
-
-  if (!user) {
-    return res.status(404).json({ error: "User not found" });
+app.get(
+  "/api/auth/me",
+  authMiddleware,
+  roleMiddleware([ROLES.USER, ROLES.SELLER, ROLES.ADMIN]),
+  (req, res) => {
+    return res.json(sanitizeUser(req.currentUser));
   }
+);
 
-  res.json({
-    id: user.id,
-    email: user.email,
-    first_name: user.first_name,
-    last_name: user.last_name,
-  });
-});
-
-app.post("/api/products", authMiddleware, (req, res) => {
-  const body = getJsonBody(req, res);
-  if (!body) {
-    return;
-  }
-
-  const { title, category, description, price } = body;
-
-  if (!title || !category || !description || price === undefined) {
-    return res.status(400).json({
-      error: "title, category, description and price are required",
+app.get(
+  "/api/protected-route",
+  authMiddleware,
+  roleMiddleware([ROLES.SELLER, ROLES.ADMIN]),
+  (req, res) => {
+    return res.json({
+      message: "Protected route for seller or admin",
+      user: sanitizeUser(req.currentUser),
     });
   }
+);
 
-  if (typeof price !== "number" || price < 0) {
-    return res.status(400).json({
-      error: "price must be a non-negative number",
+app.get(
+  "/api/protected-admin-route",
+  authMiddleware,
+  roleMiddleware([ROLES.ADMIN]),
+  (req, res) => {
+    return res.json({
+      message: "Admin only route",
+      user: sanitizeUser(req.currentUser),
     });
   }
+);
 
-  const product = {
-    id: nanoid(8),
-    title,
-    category,
-    description,
-    price,
-  };
-
-  products.push(product);
-  res.status(201).json(product);
-});
-
-app.get("/api/products", authMiddleware, (req, res) => {
-  res.json(products);
-});
-
-app.get("/api/products/:id", authMiddleware, (req, res) => {
-  const product = products.find((p) => p.id === req.params.id);
-
-  if (!product) {
-    return res.status(404).json({ error: "Product not found" });
+app.get(
+  "/api/users",
+  authMiddleware,
+  roleMiddleware([ROLES.ADMIN]),
+  (req, res) => {
+    return res.json(users.map(sanitizeUser));
   }
+);
 
-  res.json(product);
-});
+app.get(
+  "/api/users/:id",
+  authMiddleware,
+  roleMiddleware([ROLES.ADMIN]),
+  (req, res) => {
+    const user = users.find((item) => item.id === req.params.id);
 
-app.put("/api/products/:id", authMiddleware, (req, res) => {
-  const product = products.find((p) => p.id === req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
-  if (!product) {
-    return res.status(404).json({ error: "Product not found" });
+    return res.json(sanitizeUser(user));
   }
+);
 
-  const body = getJsonBody(req, res);
-  if (!body) {
-    return;
+app.put(
+  "/api/users/:id",
+  authMiddleware,
+  roleMiddleware([ROLES.ADMIN]),
+  (req, res) => {
+    const user = users.find((item) => item.id === req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const body = getJsonBody(req, res);
+    if (!body) {
+      return;
+    }
+
+    const { email, first_name, last_name, role } = body;
+
+    if (email !== undefined) {
+      const emailTaken = users.some(
+        (item) => item.email === email && item.id !== user.id
+      );
+
+      if (emailTaken) {
+        return res.status(409).json({ error: "User already exists" });
+      }
+
+      user.email = email;
+    }
+
+    if (first_name !== undefined) {
+      user.first_name = first_name;
+    }
+
+    if (last_name !== undefined) {
+      user.last_name = last_name;
+    }
+
+    if (role !== undefined) {
+      if (!isValidRole(role)) {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+
+      user.role = role;
+    }
+
+    return res.json(sanitizeUser(user));
   }
+);
 
-  const { title, category, description, price } = body;
+app.delete(
+  "/api/users/:id",
+  authMiddleware,
+  roleMiddleware([ROLES.ADMIN]),
+  (req, res) => {
+    const user = users.find((item) => item.id === req.params.id);
 
-  if (title !== undefined) product.title = title;
-  if (category !== undefined) product.category = category;
-  if (description !== undefined) product.description = description;
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
-  if (price !== undefined) {
+    if (user.id === req.currentUser.id) {
+      return res.status(400).json({ error: "You cannot block yourself" });
+    }
+
+    user.blocked = true;
+    revokeRefreshTokensForUser(user.id);
+
+    return res.json({
+      message: "User blocked",
+      user: sanitizeUser(user),
+    });
+  }
+);
+
+app.post(
+  "/api/products",
+  authMiddleware,
+  roleMiddleware([ROLES.SELLER, ROLES.ADMIN]),
+  (req, res) => {
+    const body = getJsonBody(req, res);
+    if (!body) {
+      return;
+    }
+
+    const { title, category, description, price } = body;
+
+    if (!title || !category || !description || price === undefined) {
+      return res.status(400).json({
+        error: "title, category, description and price are required",
+      });
+    }
+
     if (typeof price !== "number" || price < 0) {
       return res.status(400).json({
         error: "price must be a non-negative number",
       });
     }
 
-    product.price = price;
+    const product = {
+      id: nanoid(8),
+      title,
+      category,
+      description,
+      price,
+    };
+
+    products.push(product);
+    return res.status(201).json(product);
   }
+);
 
-  res.json(product);
-});
-
-app.delete("/api/products/:id", authMiddleware, (req, res) => {
-  const index = products.findIndex((p) => p.id === req.params.id);
-
-  if (index === -1) {
-    return res.status(404).json({ error: "Product not found" });
+app.get(
+  "/api/products",
+  authMiddleware,
+  roleMiddleware([ROLES.USER, ROLES.SELLER, ROLES.ADMIN]),
+  (req, res) => {
+    return res.json(products);
   }
+);
 
-  const deleted = products.splice(index, 1)[0];
+app.get(
+  "/api/products/:id",
+  authMiddleware,
+  roleMiddleware([ROLES.USER, ROLES.SELLER, ROLES.ADMIN]),
+  (req, res) => {
+    const product = products.find((item) => item.id === req.params.id);
 
-  res.json({
-    message: "Product deleted",
-    product: deleted,
-  });
-});
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    return res.json(product);
+  }
+);
+
+app.put(
+  "/api/products/:id",
+  authMiddleware,
+  roleMiddleware([ROLES.SELLER, ROLES.ADMIN]),
+  (req, res) => {
+    const product = products.find((item) => item.id === req.params.id);
+
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    const body = getJsonBody(req, res);
+    if (!body) {
+      return;
+    }
+
+    const { title, category, description, price } = body;
+
+    if (title !== undefined) product.title = title;
+    if (category !== undefined) product.category = category;
+    if (description !== undefined) product.description = description;
+
+    if (price !== undefined) {
+      if (typeof price !== "number" || price < 0) {
+        return res.status(400).json({
+          error: "price must be a non-negative number",
+        });
+      }
+
+      product.price = price;
+    }
+
+    return res.json(product);
+  }
+);
+
+app.delete(
+  "/api/products/:id",
+  authMiddleware,
+  roleMiddleware([ROLES.ADMIN]),
+  (req, res) => {
+    const index = products.findIndex((item) => item.id === req.params.id);
+
+    if (index === -1) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    const deleted = products.splice(index, 1)[0];
+
+    return res.json({
+      message: "Product deleted",
+      product: deleted,
+    });
+  }
+);
 
 app.listen(PORT, "0.0.0.0", () => {
   const backendUrl = process.env.CODESPACE_NAME
