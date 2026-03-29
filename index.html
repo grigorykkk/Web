@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Заметки</title>
+    <meta
+      name="description"
+      content="Офлайн-приложение для управления задачами и заметками с поддержкой установки на устройство."
+    />
+    <meta name="theme-color" content="#1f6feb" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Заметки" />
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="icon" href="./icons/favicon-32x32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="./icons/favicon-192x192.png" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <h1>Заметки</h1>
+      </header>
+
+      <main class="dashboard">
+        <section class="panel form-panel">
+          <h2>Новая задача</h2>
+          <form id="task-form" class="task-form">
+            <label class="field">
+              <span>Название</span>
+              <input
+                id="task-title"
+                name="title"
+                type="text"
+                maxlength="100"
+                placeholder="Например, подготовить отчет"
+                required
+              />
+            </label>
+
+            <label class="field">
+              <span>Описание</span>
+              <textarea
+                id="task-description"
+                name="description"
+                rows="4"
+                maxlength="280"
+                placeholder="Краткая заметка или уточнение"
+              ></textarea>
+            </label>
+
+            <div class="form-actions">
+              <button type="submit" class="primary-button">Добавить</button>
+              <button type="button" id="clear-completed" class="ghost-button">
+                Удалить выполненные
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel list-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Мои задачи</h2>
+              <p class="panel-text">Добавляйте, отмечайте и удаляйте задачи в пару кликов.</p>
+            </div>
+            <label class="filter">
+              <span>Показать</span>
+              <select id="filter-status">
+                <option value="all">Все</option>
+                <option value="active">Только активные</option>
+                <option value="completed">Только выполненные</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="stats">
+            <div class="stat-card">
+              <span class="stat-label">Всего</span>
+              <strong id="total-count">0</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Активных</span>
+              <strong id="active-count">0</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Выполнено</span>
+              <strong id="completed-count">0</strong>
+            </div>
+          </div>
+
+          <ul id="task-list" class="task-list" aria-live="polite"></ul>
+
+          <template id="task-template">
+            <li class="task-item">
+              <label class="task-main">
+                <input class="task-toggle" type="checkbox" />
+                <span class="task-copy">
+                  <span class="task-title"></span>
+                  <span class="task-description"></span>
+                </span>
+              </label>
+              <div class="task-meta">
+                <time class="task-date"></time>
+                <button type="button" class="delete-button">Удалить</button>
+              </div>
+            </li>
+          </template>
+        </section>
+      </main>
+    </div>
+
+    <script src="./client.js"></script>
+  </body>
+</html>
