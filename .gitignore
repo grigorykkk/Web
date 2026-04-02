@@ -1,0 +1,6 @@
+node_modules/
+localhost.pem
+localhost-key.pem
+vapid-keys.json
+data/
+mkcert-v*-linux-amd64

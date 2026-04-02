@@ -1,85 +1,481 @@
-const http = require("node:http");
-const fs = require("node:fs");
-const path = require("node:path");
+const STORAGE_KEY = "taskflow-tasks-v1";
+const LEGACY_NOTES_KEY = "taskflow-notes-v2";
 
-const HOST = process.env.HOST || "127.0.0.1";
-const PORT = Number(process.env.PORT) || 4173;
-const ROOT_DIR = __dirname;
+const contentDiv = document.getElementById("app-content");
 
-const MIME_TYPES = {
-  ".css": "text/css; charset=utf-8",
-  ".html": "text/html; charset=utf-8",
-  ".ico": "image/x-icon",
-  ".js": "text/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".png": "image/png",
-  ".svg": "image/svg+xml; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-};
+let socket = null;
+let vapidPublicKey = "";
+let tasks = [];
 
-function resolveRequestPath(requestUrl) {
-  const parsedUrl = new URL(requestUrl, `http://${HOST}:${PORT}`);
-  const decodedPath = decodeURIComponent(parsedUrl.pathname || "/");
-  const pathname = decodedPath === "/" ? "/index.html" : decodedPath;
-  const safePath = path.normalize(pathname).replace(/^(\.\.[/\\])+/, "");
-  return path.join(ROOT_DIR, safePath);
+function migrateLegacyNotes() {
+  if (localStorage.getItem(STORAGE_KEY)) {
+    return;
+  }
+
+  const rawLegacyNotes = localStorage.getItem(LEGACY_NOTES_KEY);
+  if (!rawLegacyNotes) {
+    return;
+  }
+
+  try {
+    const notes = JSON.parse(rawLegacyNotes);
+    const migratedTasks = Array.isArray(notes)
+      ? notes.map((note) => ({
+          id: note.id || crypto.randomUUID(),
+          title: note.title || "Без названия",
+          description: note.description || "",
+          completed: false,
+          createdAt: note.createdAt || new Date().toISOString(),
+        }))
+      : [];
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(migratedTasks));
+  } catch (error) {
+    console.error("Не удалось перенести старые заметки", error);
+  }
 }
 
-function sendFile(filePath, response) {
-  fs.stat(filePath, (statError, stats) => {
-    if (statError || !stats.isFile()) {
-      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("Файл не найден.");
+function loadTasks() {
+  migrateLegacyNotes();
+
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  } catch (error) {
+    console.error("Не удалось прочитать задачи из localStorage", error);
+    return [];
+  }
+}
+
+function saveTasks() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+}
+
+async function saveTasksToServer() {
+  const response = await fetch("./api/tasks", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tasks }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ошибка сохранения ${response.status}`);
+  }
+}
+
+function createTask(title, description) {
+  return {
+    id: crypto.randomUUID(),
+    title,
+    description,
+    completed: false,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+async function loadTasksFromServer() {
+  const response = await fetch("./api/tasks", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Ошибка загрузки ${response.status}`);
+  }
+
+  const payload = await response.json();
+  return Array.isArray(payload.tasks) ? payload.tasks : [];
+}
+
+async function hydrateTasks() {
+    const localTasks = loadTasks();
+
+  try {
+    const remoteTasks = await loadTasksFromServer();
+    if (remoteTasks.length) {
+      tasks = remoteTasks;
+      saveTasks();
       return;
     }
 
-    const extension = path.extname(filePath).toLowerCase();
-    const contentType = MIME_TYPES[extension] || "application/octet-stream";
+    tasks = localTasks;
+    if (localTasks.length) {
+      await saveTasksToServer();
+    }
+  } catch (error) {
+    console.error("Не удалось синхронизировать задачи с сервером", error);
+    tasks = localTasks;
+  }
+}
 
-    response.writeHead(200, {
-      "Content-Length": stats.size,
-      "Content-Type": contentType,
-      "Cache-Control": extension === ".html" ? "no-cache" : "public, max-age=3600",
+function formatDate(dateString) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(new Date(dateString));
+}
+
+function showToast(message, type = "info") {
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  document.body.append(toast);
+  requestAnimationFrame(() => {
+    toast.classList.add("visible");
+  });
+  window.setTimeout(() => {
+    toast.classList.remove("visible");
+    window.setTimeout(() => toast.remove(), 250);
+  }, 3200);
+}
+
+function getFilteredTasks() {
+  const filterSelect = document.getElementById("filter-status");
+  const filter = filterSelect?.value || "all";
+
+  if (filter === "active") {
+    return tasks.filter((task) => !task.completed);
+  }
+  if (filter === "completed") {
+    return tasks.filter((task) => task.completed);
+  }
+  return tasks;
+}
+
+function renderStats() {
+  const totalCount = document.getElementById("total-count");
+  const activeCount = document.getElementById("active-count");
+  const completedCount = document.getElementById("completed-count");
+
+  if (!totalCount || !activeCount || !completedCount) {
+    return;
+  }
+
+  const completed = tasks.filter((task) => task.completed).length;
+  totalCount.textContent = String(tasks.length);
+  activeCount.textContent = String(tasks.length - completed);
+  completedCount.textContent = String(completed);
+}
+
+function renderTasks() {
+  const taskList = document.getElementById("task-list");
+  const taskTemplate = document.getElementById("task-template");
+
+  if (!taskList || !taskTemplate) {
+    return;
+  }
+
+  taskList.innerHTML = "";
+  const filteredTasks = getFilteredTasks();
+
+  for (const task of filteredTasks) {
+    const fragment = taskTemplate.content.cloneNode(true);
+    const item = fragment.querySelector(".task-item");
+    const toggle = fragment.querySelector(".task-toggle");
+    const title = fragment.querySelector(".task-title");
+    const description = fragment.querySelector(".task-description");
+    const date = fragment.querySelector(".task-date");
+    const deleteButton = fragment.querySelector(".delete-button");
+
+    item.dataset.id = task.id;
+    item.classList.toggle("is-completed", task.completed);
+    toggle.checked = task.completed;
+    title.textContent = task.title;
+    description.textContent = task.description;
+    date.textContent = formatDate(task.createdAt);
+
+    toggle.addEventListener("change", () => {
+      tasks = tasks.map((currentTask) =>
+        currentTask.id === task.id
+          ? { ...currentTask, completed: !currentTask.completed }
+          : currentTask,
+      );
+      saveTasks();
+      saveTasksToServer().catch((error) => {
+        console.error("Не удалось сохранить изменение задачи", error);
+      });
+      renderStats();
+      renderTasks();
     });
 
-    const stream = fs.createReadStream(filePath);
-    stream.pipe(response);
-    stream.on("error", () => {
-      response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("Ошибка чтения файла.");
+    deleteButton.addEventListener("click", () => {
+      tasks = tasks.filter((currentTask) => currentTask.id !== task.id);
+      saveTasks();
+      saveTasksToServer().catch((error) => {
+        console.error("Не удалось удалить задачу на сервере", error);
+      });
+      renderStats();
+      renderTasks();
     });
+
+    taskList.append(fragment);
+  }
+}
+
+function upsertRemoteTask(task) {
+  const hasTask = tasks.some((currentTask) => currentTask.id === task.id);
+  if (hasTask) {
+    return;
+  }
+
+  tasks = [
+    {
+      id: task.id || crypto.randomUUID(),
+      title: task.title || "Без названия",
+      description: task.description || "",
+      completed: false,
+      createdAt: task.createdAt || new Date().toISOString(),
+    },
+    ...tasks,
+  ];
+  saveTasks();
+  saveTasksToServer().catch((error) => {
+    console.error("Не удалось сохранить удалённую задачу на сервере", error);
   });
 }
 
-const server = http.createServer((request, response) => {
-  if (!request.url) {
-    response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
-    response.end("Некорректный запрос.");
+async function loadContent(page) {
+  try {
+    const response = await fetch(`./content/${page}.html`, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`Ошибка ${response.status}`);
+    }
+
+    const html = await response.text();
+    contentDiv.innerHTML = html;
+
+    if (page === "home") {
+      await initTasks();
+    }
+  } catch (error) {
+    console.error("Ошибка загрузки страницы", error);
+    contentDiv.innerHTML = `
+      <section class="panel">
+        <h2>Ошибка загрузки</h2>
+        <p class="panel-text">Не удалось получить содержимое страницы.</p>
+      </section>
+    `;
+  }
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let index = 0; index < rawData.length; index += 1) {
+    outputArray[index] = rawData.charCodeAt(index);
+  }
+
+  return outputArray;
+}
+
+async function subscribeToPush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !vapidPublicKey) {
+    showToast("Push-уведомления в этом браузере недоступны.", "error");
     return;
   }
 
-  const requestUrl = new URL(request.url, `http://${HOST}:${PORT}`);
+  const registration = await navigator.serviceWorker.ready;
+  let subscription = await registration.pushManager.getSubscription();
 
-  if (requestUrl.pathname === "/__ping") {
-    response.writeHead(200, {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store, no-cache, must-revalidate",
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
     });
-    response.end(JSON.stringify({ ok: true, timestamp: Date.now() }));
+  }
+
+  await fetch("./subscribe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(subscription),
+  });
+
+  updatePushButtons(true);
+  showToast("Push-уведомления включены.", "success");
+}
+
+async function unsubscribeFromPush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
     return;
   }
 
-  const filePath = resolveRequestPath(request.url);
+  const registration = await navigator.serviceWorker.ready;
+  const subscription = await registration.pushManager.getSubscription();
 
-  if (!filePath.startsWith(ROOT_DIR)) {
-    response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
-    response.end("Доступ запрещен.");
+  if (!subscription) {
+    updatePushButtons(false);
     return;
   }
 
-  sendFile(filePath, response);
-});
+  await fetch("./unsubscribe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint: subscription.endpoint }),
+  });
 
-server.listen(PORT, HOST, () => {
-  console.log(`TaskFlow доступен по адресу: http://${HOST}:${PORT}`);
+  await subscription.unsubscribe();
+  updatePushButtons(false);
+  showToast("Push-уведомления отключены.", "info");
+}
+
+function updatePushButtons(hasSubscription) {
+  const enableButton = document.getElementById("enable-push");
+  const disableButton = document.getElementById("disable-push");
+
+  if (!enableButton || !disableButton) {
+    return;
+  }
+
+  enableButton.hidden = hasSubscription;
+  disableButton.hidden = !hasSubscription;
+}
+
+async function initPushControls() {
+  const enableButton = document.getElementById("enable-push");
+  const disableButton = document.getElementById("disable-push");
+
+  if (!enableButton || !disableButton || !("serviceWorker" in navigator)) {
+    return;
+  }
+
+  const registration = await navigator.serviceWorker.ready;
+  const existingSubscription = await registration.pushManager.getSubscription();
+  updatePushButtons(Boolean(existingSubscription));
+
+  enableButton.addEventListener("click", async () => {
+    try {
+      if (Notification.permission === "denied") {
+        showToast("Уведомления заблокированы в настройках браузера.", "error");
+        return;
+      }
+
+      if (Notification.permission === "default") {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          showToast("Необходимо разрешить уведомления.", "error");
+          return;
+        }
+      }
+
+      await subscribeToPush();
+    } catch (error) {
+      console.error("Ошибка подписки на push", error);
+      showToast("Не удалось включить push-уведомления.", "error");
+    }
+  });
+
+  disableButton.addEventListener("click", async () => {
+    try {
+      await unsubscribeFromPush();
+    } catch (error) {
+      console.error("Ошибка отключения push", error);
+      showToast("Не удалось отключить push-уведомления.", "error");
+    }
+  });
+}
+
+async function initTasks() {
+  const form = document.getElementById("task-form");
+  const titleInput = document.getElementById("task-title");
+  const descriptionInput = document.getElementById("task-description");
+  const clearCompletedButton = document.getElementById("clear-completed");
+  const filterSelect = document.getElementById("filter-status");
+
+  await hydrateTasks();
+  renderStats();
+  renderTasks();
+  initPushControls();
+
+  form?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const title = titleInput?.value.trim() || "";
+    const description = descriptionInput?.value.trim() || "";
+
+    if (!title) {
+      titleInput?.focus();
+      return;
+    }
+
+    const newTask = createTask(title, description);
+    tasks = [newTask, ...tasks];
+    saveTasks();
+    saveTasksToServer().catch((error) => {
+      console.error("Не удалось сохранить новую задачу на сервере", error);
+    });
+    renderStats();
+    renderTasks();
+    form.reset();
+    titleInput?.focus();
+
+    if (socket?.connected) {
+      socket.emit("newTask", newTask);
+    }
+  });
+
+  clearCompletedButton?.addEventListener("click", () => {
+    tasks = tasks.filter((task) => !task.completed);
+    saveTasks();
+    saveTasksToServer().catch((error) => {
+      console.error("Не удалось удалить выполненные задачи на сервере", error);
+    });
+    renderStats();
+    renderTasks();
+  });
+
+  filterSelect?.addEventListener("change", renderTasks);
+}
+
+async function loadRuntimeConfig() {
+  try {
+    const response = await fetch("./api/config");
+    if (!response.ok) {
+      throw new Error(`Ошибка ${response.status}`);
+    }
+
+    const config = await response.json();
+    vapidPublicKey = config.vapidPublicKey || "";
+  } catch (error) {
+    console.error("Не удалось загрузить конфигурацию клиента", error);
+  }
+}
+
+function connectSocket() {
+  if (!window.io) {
+    return;
+  }
+
+  socket = window.io({
+    transports: ["websocket", "polling"],
+  });
+
+  socket.on("taskAdded", (task) => {
+    if (task.senderId === socket.id) {
+      return;
+    }
+
+    upsertRemoteTask(task);
+    showToast(`Новая задача: ${task.title}`, "info");
+    renderStats();
+    renderTasks();
+  });
+}
+
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.register("./sw.js", {
+      updateViaCache: "none",
+    });
+    await registration.update();
+  } catch (error) {
+    console.error("Ошибка регистрации Service Worker", error);
+  }
+}
+
+window.addEventListener("DOMContentLoaded", async () => {
+  await loadRuntimeConfig();
+  connectSocket();
+  await registerServiceWorker();
+  await loadContent("home");
 });

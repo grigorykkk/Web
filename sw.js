@@ -1,11 +1,12 @@
-const CACHE_NAME = "taskflow-cache-v2";
-const APP_SHELL = [
+const APP_SHELL_CACHE = "taskflow-app-shell-v4";
+const DYNAMIC_CACHE = "taskflow-dynamic-v2";
+const APP_SHELL_ASSETS = [
   "./",
   "./index.html",
-  "./style.css",
   "./app.js",
-  "./client.js",
+  "./style.css",
   "./manifest.json",
+  "./content/home.html",
   "./icons/favicon-32x32.png",
   "./icons/favicon-64x64.png",
   "./icons/favicon-128x128.png",
@@ -14,20 +15,16 @@ const APP_SHELL = [
   "./icons/favicon-512x512.png",
 ];
 
-function isAppAssetRequest(request) {
-  const url = new URL(request.url);
-  const isSameOrigin = url.origin === self.location.origin;
-  const isDocument = request.mode === "navigate";
-  const isStaticAsset = [".css", ".js", ".json", ".png", ".ico", ".html"].some((extension) =>
-    url.pathname.endsWith(extension),
-  );
-
-  return isSameOrigin && (isDocument || isStaticAsset);
+function isDynamicContentRequest(requestUrl) {
+  return requestUrl.pathname.startsWith("/content/");
 }
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()),
+    caches
+      .open(APP_SHELL_CACHE)
+      .then((cache) => cache.addAll(APP_SHELL_ASSETS))
+      .then(() => self.skipWaiting()),
   );
 });
 
@@ -36,7 +33,11 @@ self.addEventListener("activate", (event) => {
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))),
+        Promise.all(
+          keys
+            .filter((key) => key !== APP_SHELL_CACHE && key !== DYNAMIC_CACHE)
+            .map((key) => caches.delete(key)),
+        ),
       )
       .then(() => self.clients.claim()),
   );
@@ -47,34 +48,22 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  const requestUrl = new URL(event.request.url);
-  if (requestUrl.origin === self.location.origin && requestUrl.pathname === "/__ping") {
-    event.respondWith(fetch(event.request));
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) {
     return;
   }
 
-  if (isAppAssetRequest(event.request)) {
+  if (isDynamicContentRequest(url)) {
     event.respondWith(
       fetch(event.request)
         .then((networkResponse) => {
           const responseClone = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
+          caches.open(DYNAMIC_CACHE).then((cache) => cache.put(event.request, responseClone));
           return networkResponse;
         })
         .catch(async () => {
           const cachedResponse = await caches.match(event.request);
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-
-          if (event.request.mode === "navigate") {
-            return caches.match("./index.html");
-          }
-
-          return new Response("Ресурс недоступен офлайн.", {
-            status: 503,
-            headers: { "Content-Type": "text/plain; charset=utf-8" },
-          });
+          return cachedResponse || caches.match("./content/home.html");
         }),
     );
     return;
@@ -88,21 +77,56 @@ self.addEventListener("fetch", (event) => {
 
       return fetch(event.request)
         .then((networkResponse) => {
-          if (event.request.url.startsWith(self.location.origin)) {
+          if (url.origin === self.location.origin && networkResponse.ok) {
             const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
+            caches.open(APP_SHELL_CACHE).then((cache) => cache.put(event.request, responseClone));
           }
           return networkResponse;
         })
-        .catch(() => {
+        .catch(async () => {
           if (event.request.mode === "navigate") {
             return caches.match("./index.html");
           }
+
           return new Response("Ресурс недоступен офлайн.", {
             status: 503,
             headers: { "Content-Type": "text/plain; charset=utf-8" },
           });
         });
+    }),
+  );
+});
+
+self.addEventListener("push", (event) => {
+  let data = { title: "Новое уведомление", body: "Появилась новая задача." };
+
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch (error) {
+      data.body = event.data.text();
+    }
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: "./icons/favicon-192x192.png",
+      badge: "./icons/favicon-64x64.png",
+      data: { url: "./" },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      const existingClient = clientList.find((client) => "focus" in client);
+      if (existingClient) {
+        return existingClient.focus();
+      }
+      return clients.openWindow("./");
     }),
   );
 });
