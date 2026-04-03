@@ -26,6 +26,7 @@ function migrateLegacyNotes() {
           description: note.description || "",
           completed: false,
           createdAt: note.createdAt || new Date().toISOString(),
+          reminder: note.reminder || null,
         }))
       : [];
 
@@ -69,6 +70,7 @@ function createTask(title, description) {
     description,
     completed: false,
     createdAt: new Date().toISOString(),
+    reminder: null,
   };
 }
 
@@ -83,7 +85,7 @@ async function loadTasksFromServer() {
 }
 
 async function hydrateTasks() {
-    const localTasks = loadTasks();
+  const localTasks = loadTasks();
 
   try {
     const remoteTasks = await loadTasksFromServer();
@@ -108,6 +110,12 @@ function formatDate(dateString) {
     dateStyle: "short",
     timeStyle: "short",
   }).format(new Date(dateString));
+}
+
+function getTaskDescription(task) {
+  return [task.description, task.reminder ? `Напоминание: ${formatDate(task.reminder)}` : ""]
+    .filter(Boolean)
+    .join(" • ");
 }
 
 function showToast(message, type = "info") {
@@ -176,7 +184,7 @@ function renderTasks() {
     item.classList.toggle("is-completed", task.completed);
     toggle.checked = task.completed;
     title.textContent = task.title;
-    description.textContent = task.description;
+    description.textContent = getTaskDescription(task);
     date.textContent = formatDate(task.createdAt);
 
     toggle.addEventListener("change", () => {
@@ -220,6 +228,7 @@ function upsertRemoteTask(task) {
       description: task.description || "",
       completed: false,
       createdAt: task.createdAt || new Date().toISOString(),
+      reminder: task.reminder || null,
     },
     ...tasks,
   ];
@@ -376,6 +385,7 @@ async function initTasks() {
   const form = document.getElementById("task-form");
   const titleInput = document.getElementById("task-title");
   const descriptionInput = document.getElementById("task-description");
+  const reminderInput = document.getElementById("task-reminder");
   const clearCompletedButton = document.getElementById("clear-completed");
   const filterSelect = document.getElementById("filter-status");
 
@@ -388,13 +398,29 @@ async function initTasks() {
     event.preventDefault();
     const title = titleInput?.value.trim() || "";
     const description = descriptionInput?.value.trim() || "";
+    const reminderValue = reminderInput?.value || "";
 
     if (!title) {
       titleInput?.focus();
       return;
     }
 
-    const newTask = createTask(title, description);
+    let reminder = null;
+    if (reminderValue) {
+      const reminderDate = new Date(reminderValue);
+      if (Number.isNaN(reminderDate.getTime()) || reminderDate.getTime() <= Date.now()) {
+        showToast("Дата напоминания должна быть в будущем.", "error");
+        reminderInput?.focus();
+        return;
+      }
+
+      reminder = reminderDate.toISOString();
+    }
+
+    const newTask = {
+      ...createTask(title, description),
+      reminder,
+    };
     tasks = [newTask, ...tasks];
     saveTasks();
     saveTasksToServer().catch((error) => {
@@ -407,6 +433,14 @@ async function initTasks() {
 
     if (socket?.connected) {
       socket.emit("newTask", newTask);
+      if (newTask.reminder) {
+        socket.emit("newReminder", {
+          id: newTask.id,
+          title: newTask.title,
+          description: newTask.description,
+          reminderTime: newTask.reminder,
+        });
+      }
     }
   });
 

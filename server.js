@@ -42,6 +42,7 @@ webpush.setVapidDetails(
 
 const app = express();
 const subscriptions = new Map();
+const reminders = new Map();
 
 app.use(cors());
 app.use(express.json());
@@ -88,6 +89,112 @@ function writeClientTasks(clientId, tasks) {
   fs.writeFileSync(filePath, `${JSON.stringify(tasks, null, 2)}\n`, "utf8");
 }
 
+function getClientSubscriptions(clientId) {
+  if (!subscriptions.has(clientId)) {
+    subscriptions.set(clientId, new Map());
+  }
+
+  return subscriptions.get(clientId);
+}
+
+function getReminderKey(clientId, reminderId) {
+  return `${clientId}:${String(reminderId)}`;
+}
+
+async function sendPushNotifications(clientId, payload) {
+  const clientSubscriptions = getClientSubscriptions(clientId);
+  const results = [...clientSubscriptions.values()].map(async (subscription) => {
+    try {
+      await webpush.sendNotification(subscription, payload);
+    } catch (error) {
+      const statusCode = error?.statusCode || 0;
+      if (statusCode === 404 || statusCode === 410) {
+        clientSubscriptions.delete(subscription.endpoint);
+      } else {
+        console.error("Push error:", error.message || error);
+      }
+    }
+  });
+
+  await Promise.all(results);
+}
+
+function clearReminder(clientId, reminderId) {
+  const reminderKey = getReminderKey(clientId, reminderId);
+  const scheduledReminder = reminders.get(reminderKey);
+  if (!scheduledReminder) {
+    return;
+  }
+
+  clearTimeout(scheduledReminder.timeoutId);
+  reminders.delete(reminderKey);
+}
+
+function scheduleReminder(clientId, task) {
+  if (!task?.id) {
+    return false;
+  }
+
+  clearReminder(clientId, task.id);
+
+  if (!task.reminder || task.completed) {
+    return false;
+  }
+
+  const reminderTimestamp = new Date(task.reminder).getTime();
+  if (Number.isNaN(reminderTimestamp)) {
+    return false;
+  }
+
+  const delay = reminderTimestamp - Date.now();
+  if (delay <= 0) {
+    return false;
+  }
+
+  const reminderKey = getReminderKey(clientId, task.id);
+  const text = task.description ? `${task.title}: ${task.description}` : task.title;
+  const timeoutId = setTimeout(async () => {
+    try {
+      await sendPushNotifications(
+        clientId,
+        JSON.stringify({
+          title: "Напоминание",
+          body: text,
+          reminderId: task.id,
+        }),
+      );
+    } finally {
+      reminders.delete(reminderKey);
+    }
+  }, delay);
+
+  reminders.set(reminderKey, {
+    clientId,
+    reminderId: task.id,
+    text,
+    timeoutId,
+    reminderTime: task.reminder,
+  });
+
+  return true;
+}
+
+function syncRemindersForClient(clientId, tasks) {
+  const actualReminderKeys = new Set(tasks.map((task) => getReminderKey(clientId, task.id)));
+
+  for (const reminderKey of reminders.keys()) {
+    if (reminderKey.startsWith(`${clientId}:`) && !actualReminderKeys.has(reminderKey)) {
+      const scheduledReminder = reminders.get(reminderKey);
+      clearTimeout(scheduledReminder.timeoutId);
+      reminders.delete(reminderKey);
+    }
+  }
+
+  for (const task of tasks) {
+    scheduleReminder(clientId, task);
+  }
+}
+
 app.use((request, response, next) => {
   const cookies = parseCookies(request.headers.cookie);
   const clientId = cookies[CLIENT_COOKIE] || crypto.randomUUID();
@@ -129,6 +236,7 @@ app.put("/api/tasks", (request, response) => {
   }
 
   writeClientTasks(request.clientId, tasks);
+  syncRemindersForClient(request.clientId, tasks);
   response.json({ ok: true });
 });
 
@@ -140,7 +248,8 @@ app.post("/subscribe", (request, response) => {
     return;
   }
 
-  subscriptions.set(subscription.endpoint, subscription);
+  const clientSubscriptions = getClientSubscriptions(request.clientId);
+  clientSubscriptions.set(subscription.endpoint, subscription);
   response.status(201).json({ message: "Подписка сохранена." });
 });
 
@@ -152,8 +261,56 @@ app.post("/unsubscribe", (request, response) => {
     return;
   }
 
-  subscriptions.delete(endpoint);
+  const clientSubscriptions = getClientSubscriptions(request.clientId);
+  clientSubscriptions.delete(endpoint);
   response.json({ message: "Подписка удалена." });
+});
+
+app.post("/snooze", (request, response) => {
+  const { reminderId } = request.body || {};
+  const reminderKey = getReminderKey(request.clientId, reminderId);
+
+  if (!reminderId || !reminders.has(reminderKey)) {
+    response.status(404).json({ message: "Напоминание не найдено." });
+    return;
+  }
+
+  const scheduledReminder = reminders.get(reminderKey);
+  clearTimeout(scheduledReminder.timeoutId);
+
+  const newReminderTime = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  const timeoutId = setTimeout(async () => {
+    try {
+      await sendPushNotifications(
+        request.clientId,
+        JSON.stringify({
+          title: "Напоминание отложено",
+          body: scheduledReminder.text,
+          reminderId,
+        }),
+      );
+    } finally {
+      reminders.delete(reminderKey);
+    }
+  }, 5 * 60 * 1000);
+
+  reminders.set(reminderKey, {
+    ...scheduledReminder,
+    timeoutId,
+    reminderTime: newReminderTime,
+  });
+
+  const tasks = readClientTasks(request.clientId).map((task) =>
+    task.id === reminderId
+      ? {
+          ...task,
+          reminder: newReminderTime,
+        }
+      : task,
+  );
+  writeClientTasks(request.clientId, tasks);
+
+  response.json({ message: "Напоминание отложено на 5 минут." });
 });
 
 function createServer() {
@@ -193,32 +350,9 @@ const io = new Server(runtime.server, {
   },
 });
 
-async function sendPushNotifications(task) {
-  const payload = JSON.stringify({
-    title: "Новая задача",
-    body: task.description
-      ? `${task.title}: ${task.description}`
-      : task.title,
-  });
-
-  const results = [...subscriptions.values()].map(async (subscription) => {
-    try {
-      await webpush.sendNotification(subscription, payload);
-    } catch (error) {
-      const statusCode = error?.statusCode || 0;
-      if (statusCode === 404 || statusCode === 410) {
-        subscriptions.delete(subscription.endpoint);
-      } else {
-        console.error("Push error:", error.message || error);
-      }
-    }
-  });
-
-  await Promise.all(results);
-}
-
 io.on("connection", (socket) => {
   console.log("Клиент подключён:", socket.id);
+  const clientId = parseCookies(socket.handshake.headers.cookie)[CLIENT_COOKIE];
 
   socket.on("newTask", async (task) => {
     const taskPayload = {
@@ -228,7 +362,29 @@ io.on("connection", (socket) => {
     };
 
     io.emit("taskAdded", taskPayload);
-    await sendPushNotifications(taskPayload);
+    if (clientId) {
+      await sendPushNotifications(
+        clientId,
+        JSON.stringify({
+          title: "Новая задача",
+          body: task.description ? `${task.title}: ${task.description}` : task.title,
+        }),
+      );
+    }
+  });
+
+  socket.on("newReminder", (reminder) => {
+    if (!clientId) {
+      return;
+    }
+
+    scheduleReminder(clientId, {
+      id: reminder.id,
+      title: reminder.title || "Без названия",
+      description: reminder.description || "",
+      reminder: reminder.reminderTime,
+      completed: false,
+    });
   });
 
   socket.on("disconnect", () => {

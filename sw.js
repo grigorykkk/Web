@@ -98,7 +98,7 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  let data = { title: "Новое уведомление", body: "Появилась новая задача." };
+  let data = { title: "Новое уведомление", body: "Появилась новая задача.", reminderId: null };
 
   if (event.data) {
     try {
@@ -113,13 +113,30 @@ self.addEventListener("push", (event) => {
       body: data.body,
       icon: "./icons/favicon-192x192.png",
       badge: "./icons/favicon-64x64.png",
-      data: { url: "./" },
+      data: { url: "./", reminderId: data.reminderId || null },
+      actions: data.reminderId
+        ? [{ action: "snooze", title: "Отложить на 5 минут" }]
+        : [],
     }),
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
+  const { action, notification } = event;
+  const reminderId = notification.data?.reminderId;
+
+  if (action === "snooze" && reminderId) {
+    event.waitUntil(
+      fetch("./snooze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reminderId }),
+      }).finally(() => notification.close()),
+    );
+    return;
+  }
+
+  notification.close();
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
       const existingClient = clientList.find((client) => "focus" in client);
