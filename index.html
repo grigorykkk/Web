@@ -3,36 +3,127 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Заметки</title>
+    <title>Users API Terminal</title>
     <meta
       name="description"
-      content="Офлайн-приложение для управления задачами и заметками с поддержкой установки на устройство."
+      content="Терминальный интерфейс для CRUD API пользователей на Express и Supabase PostgreSQL."
     />
-    <meta name="theme-color" content="#1f6feb" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Заметки" />
-    <link rel="manifest" href="./manifest.json" />
-    <link rel="icon" href="./icons/favicon-32x32.png" sizes="32x32" type="image/png" />
-    <link rel="apple-touch-icon" href="./icons/favicon-192x192.png" />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <header class="hero">
-        <h1>Заметки</h1>
-      </header>
+    <main class="workspace">
+      <section class="terminal" aria-label="Терминальный интерфейс Users API">
+        <header class="terminal-bar">
+          <div class="window-controls" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="terminal-title">student@practice-19:~/supabase-users</div>
+          <div class="status" id="db-status">ПРОВЕРКА БД...</div>
+        </header>
 
-      <main id="app-content" class="dashboard" aria-live="polite">
-        <section class="panel">
-          <h2>Загрузка</h2>
-          <p class="panel-text">Подготавливаем содержимое страницы.</p>
+        <section class="command">
+          <div>
+            <p class="prompt-line"><span>postgres</span>@supabase:~$ node server.js</p>
+          </div>
         </section>
-      </main>
-    </div>
 
-    <script src="/socket.io/socket.io.js"></script>
+        <section class="layout">
+          <aside class="editor" aria-labelledby="form-title">
+            <div>
+              <p class="prompt-line"><span>api</span>@users:~$ edit --record</p>
+              <h2 id="form-title">Добавить пользователя</h2>
+            </div>
+
+            <form id="user-form" class="user-form">
+              <input type="hidden" id="user-id" />
+
+              <label>
+                <span>--first_name</span>
+                <input id="first-name" name="first_name" type="text" maxlength="80" required autocomplete="off" />
+              </label>
+
+              <label>
+                <span>--last_name</span>
+                <input id="last-name" name="last_name" type="text" maxlength="80" required autocomplete="off" />
+              </label>
+
+              <label>
+                <span>--age</span>
+                <input id="age" name="age" type="number" min="0" max="130" required />
+              </label>
+
+              <div class="actions">
+                <button class="primary" type="submit">Выполнить</button>
+                <button class="secondary" id="reset-form" type="button">Очистить</button>
+              </div>
+            </form>
+          </aside>
+
+          <section class="table-area" aria-labelledby="table-title">
+            <div class="table-toolbar">
+              <div>
+                <p class="prompt-line"><span>sql</span>@db:~$ SELECT * FROM users;</p>
+                <h2 id="table-title">Результат запроса</h2>
+              </div>
+              <label class="search">
+                <span>поиск</span>
+                <input id="search" type="search" placeholder="имя или фамилия" autocomplete="off" />
+              </label>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>first_name</th>
+                    <th>last_name</th>
+                    <th>age</th>
+                    <th>created_at</th>
+                    <th>updated_at</th>
+                    <th>Действия</th>
+                  </tr>
+                </thead>
+                <tbody id="users-table"></tbody>
+              </table>
+            </div>
+
+            <div class="empty" id="empty-state" hidden>Записей пока нет.</div>
+          </section>
+        </section>
+
+        <section class="log-panel" aria-labelledby="log-title">
+          <div class="log-heading">
+            <p class="prompt-line"><span>system</span>@log:~$ tail -f api.log</p>
+            <h2 id="log-title">Журнал действий</h2>
+          </div>
+          <ol id="activity-log" class="activity-log"></ol>
+        </section>
+      </section>
+    </main>
+
+    <template id="user-row-template">
+      <tr>
+        <td data-label="ID" class="id-cell"></td>
+        <td data-label="first_name" class="first-name-cell"></td>
+        <td data-label="last_name" class="last-name-cell"></td>
+        <td data-label="age" class="age-cell"></td>
+        <td data-label="created_at" class="created-cell"></td>
+        <td data-label="updated_at" class="updated-cell"></td>
+        <td data-label="Действия" class="row-actions">
+          <button class="icon-button edit-button" type="button" aria-label="Редактировать" title="Редактировать">
+            Правка
+          </button>
+          <button class="icon-button delete-button" type="button" aria-label="Удалить" title="Удалить">
+            Удалить
+          </button>
+        </td>
+      </tr>
+    </template>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="./app.js"></script>
   </body>
 </html>

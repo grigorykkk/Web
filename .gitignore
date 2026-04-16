@@ -1,4 +1,5 @@
 node_modules/
+.env
 localhost.pem
 localhost-key.pem
 vapid-keys.json

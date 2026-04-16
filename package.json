@@ -1,15 +1,17 @@
 {
-  "name": "taskflow-pwa",
+  "name": "supabase-users-api",
   "version": "1.0.0",
-  "description": "Учебное PWA-приложение с App Shell, Socket.IO и push-уведомлениями.",
+  "description": "Практическое занятие 19: CRUD API пользователей на Express и PostgreSQL/Supabase.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
     "express": "^5.1.0",
-    "socket.io": "^4.8.1",
-    "web-push": "^3.6.7"
-  }
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {}
 }
