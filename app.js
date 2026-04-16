@@ -17,10 +17,12 @@ let users = [];
 let toastTimeout = null;
 
 function formatDate(value) {
+  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+
   return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "short",
     timeStyle: "short",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function showToast(message, type = "ok") {
@@ -97,8 +99,8 @@ function renderUsers() {
     row.querySelector(".first-name-cell").textContent = user.first_name;
     row.querySelector(".last-name-cell").textContent = user.last_name;
     row.querySelector(".age-cell").textContent = user.age;
-    row.querySelector(".created-cell").textContent = formatDate(user.created_at);
-    row.querySelector(".updated-cell").textContent = formatDate(user.updated_at);
+    row.querySelector(".created-cell").textContent = user.created_at;
+    row.querySelector(".updated-cell").textContent = user.updated_at;
 
     row.querySelector(".edit-button").addEventListener("click", () => fillForm(user));
     row.querySelector(".delete-button").addEventListener("click", async () => {
@@ -127,13 +129,13 @@ async function loadUsers() {
 
   users = await requestJson(`/api/users${query.size ? `?${query}` : ""}`);
   renderUsers();
-  writeLog("SELECT", `получено записей: ${users.length}`);
+  writeLog("FIND", `получено документов: ${users.length}`);
 }
 
 async function checkHealth() {
   try {
     const health = await requestJson("/api/health");
-    dbStatus.textContent = `БД ОНЛАЙН ${formatDate(health.databaseTime)}`;
+    dbStatus.textContent = `MONGODB ОНЛАЙН ${formatDate(health.databaseTime)}`;
     dbStatus.dataset.state = "ok";
     writeLog("HEALTH", "подключение к базе установлено");
   } catch (error) {

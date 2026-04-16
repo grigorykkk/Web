@@ -3,29 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Users API Terminal</title>
+    <title>MongoDB Users API</title>
     <meta
       name="description"
-      content="Терминальный интерфейс для CRUD API пользователей на Express и Supabase PostgreSQL."
+      content="Интерфейс для CRUD API пользователей на Express и MongoDB."
     />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <main class="workspace">
-      <section class="terminal" aria-label="Терминальный интерфейс Users API">
+      <section class="terminal" aria-label="Интерфейс MongoDB Users API">
         <header class="terminal-bar">
           <div class="window-controls" aria-hidden="true">
             <span></span>
             <span></span>
             <span></span>
           </div>
-          <div class="terminal-title">student@practice-19:~/supabase-users</div>
-          <div class="status" id="db-status">ПРОВЕРКА БД...</div>
+          <div class="terminal-title">student@practice-20:~/mongodb-users</div>
+          <div class="status" id="db-status">ПРОВЕРКА MONGODB...</div>
         </header>
 
         <section class="command">
           <div>
-            <p class="prompt-line"><span>postgres</span>@supabase:~$ node server.js</p>
+            <p class="prompt-line"><span>mongo</span>@nosql:~$ node server.js</p>
           </div>
         </section>
 
@@ -64,7 +64,7 @@
           <section class="table-area" aria-labelledby="table-title">
             <div class="table-toolbar">
               <div>
-                <p class="prompt-line"><span>sql</span>@db:~$ SELECT * FROM users;</p>
+                <p class="prompt-line"><span>mongo</span>@db:~$ db.users.find()</p>
                 <h2 id="table-title">Результат запроса</h2>
               </div>
               <label class="search">
@@ -81,8 +81,8 @@
                     <th>first_name</th>
                     <th>last_name</th>
                     <th>age</th>
-                    <th>created_at</th>
-                    <th>updated_at</th>
+                    <th>created_at Unix</th>
+                    <th>updated_at Unix</th>
                     <th>Действия</th>
                   </tr>
                 </thead>
