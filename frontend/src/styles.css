@@ -61,8 +61,9 @@ h1 {
 .message {
   border: 1px solid rgba(111, 145, 188, 0.2);
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 18px 48px rgba(28, 36, 52, 0.08);
+  -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
 
@@ -156,6 +157,12 @@ button.danger {
   margin-bottom: 16px;
   padding: 14px 16px;
   color: #23415f;
+}
+
+.cacheMeta {
+  margin: 0 0 12px;
+  color: #45617d;
+  font-size: 14px;
 }
 
 pre {

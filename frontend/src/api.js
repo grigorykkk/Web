@@ -38,6 +38,19 @@ function resolveApiBaseUrl() {
   return `${protocol}//${hostname}/api`;
 }
 
+function decodeBase64Url(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const decoded = atob(padded);
+
+  try {
+    const bytes = Uint8Array.from(decoded, (char) => char.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch (error) {
+    return decoded;
+  }
+}
+
 function parseJwtPayload(token) {
   if (typeof token !== "string") {
     return null;
@@ -49,9 +62,7 @@ function parseJwtPayload(token) {
   }
 
   try {
-    const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    return JSON.parse(atob(padded));
+    return JSON.parse(decodeBase64Url(parts[1]));
   } catch (error) {
     return null;
   }

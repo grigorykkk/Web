@@ -33,9 +33,51 @@ function formatRole(role) {
   return "Пользователь";
 }
 
+function unwrapCachedResponse(payload) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "data" in payload &&
+    "source" in payload
+  ) {
+    return payload.data;
+  }
+
+  return payload;
+}
+
+function parsePriceInput(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.replace(",", ".").trim();
+  if (normalized === "") {
+    return null;
+  }
+
+  const price = Number(normalized);
+  if (!Number.isFinite(price) || price < 0) {
+    return null;
+  }
+
+  return price;
+}
+
+function getTrimmedFormValue(formData, key) {
+  const value = formData.get(key);
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [message, setMessage] = useState("");
+  const [cacheInfo, setCacheInfo] = useState({
+    products: "",
+    product: "",
+    users: "",
+    user: "",
+  });
   const [authTab, setAuthTab] = useState("login");
 
   const [loginForm, setLoginForm] = useState({
@@ -68,6 +110,12 @@ export default function App() {
     setProducts([]);
     setSelectedProductId("");
     setSelectedProduct(null);
+    setCacheInfo({
+      products: "",
+      product: "",
+      users: "",
+      user: "",
+    });
     setCreateForm(emptyProductForm);
     setEditId("");
     setEditForm(emptyProductForm);
@@ -116,20 +164,31 @@ export default function App() {
 
     try {
       const response = await api.getProducts();
-      setProducts(response.data);
-      return response.data;
+      setProducts(unwrapCachedResponse(response.data));
+      setCacheInfo((current) => ({
+        ...current,
+        products: response.data?.source || "",
+      }));
+      return unwrapCachedResponse(response.data);
     } catch (error) {
       if (!session.hasSession()) {
         return null;
       }
 
       setProducts([]);
+      setCacheInfo((current) => ({
+        ...current,
+        products: "",
+      }));
       setMessage(getErrorMessage(error, "Не удалось загрузить товары"));
       return null;
     }
   }
 
-  async function loadUsers(role = user?.role) {
+  async function loadUsers(roleOrEvent = user?.role) {
+    const role =
+      typeof roleOrEvent === "string" ? roleOrEvent : user?.role;
+
     if (!session.hasSession() || role !== "admin") {
       setUsers([]);
       return null;
@@ -137,14 +196,22 @@ export default function App() {
 
     try {
       const response = await api.getUsers();
-      setUsers(response.data);
-      return response.data;
+      setUsers(unwrapCachedResponse(response.data));
+      setCacheInfo((current) => ({
+        ...current,
+        users: response.data?.source || "",
+      }));
+      return unwrapCachedResponse(response.data);
     } catch (error) {
       if (!session.hasSession()) {
         return null;
       }
 
       setUsers([]);
+      setCacheInfo((current) => ({
+        ...current,
+        users: "",
+      }));
       setMessage(getErrorMessage(error, "Не удалось загрузить пользователей"));
       return null;
     }
@@ -225,10 +292,28 @@ export default function App() {
     event.preventDefault();
     setMessage("");
 
+    const formData = new FormData(event.currentTarget);
+    const title = getTrimmedFormValue(formData, "title");
+    const category = getTrimmedFormValue(formData, "category");
+    const description = getTrimmedFormValue(formData, "description");
+    const price = parsePriceInput(getTrimmedFormValue(formData, "price"));
+
+    if (!title || !category || !description) {
+      setMessage("Название, категория и описание обязательны");
+      return;
+    }
+
+    if (price === null) {
+      setMessage("Укажите корректную неотрицательную цену");
+      return;
+    }
+
     try {
       await api.createProduct({
-        ...createForm,
-        price: Number(createForm.price),
+        title,
+        category,
+        description,
+        price,
       });
 
       setCreateForm(emptyProductForm);
@@ -247,11 +332,19 @@ export default function App() {
 
     try {
       const response = await api.getProductById(selectedProductId);
-      setSelectedProduct(response.data);
+      setSelectedProduct(unwrapCachedResponse(response.data));
+      setCacheInfo((current) => ({
+        ...current,
+        product: response.data?.source || "",
+      }));
       setMessage("Товар найден");
     } catch (error) {
       if (session.hasSession()) {
         setSelectedProduct(null);
+        setCacheInfo((current) => ({
+          ...current,
+          product: "",
+        }));
         setMessage(getErrorMessage(error, "Ошибка получения товара"));
       }
     }
@@ -267,7 +360,15 @@ export default function App() {
       if (editForm.title !== "") payload.title = editForm.title;
       if (editForm.category !== "") payload.category = editForm.category;
       if (editForm.description !== "") payload.description = editForm.description;
-      if (editForm.price !== "") payload.price = Number(editForm.price);
+      if (editForm.price !== "") {
+        const price = parsePriceInput(editForm.price);
+        if (price === null) {
+          setMessage("Укажите корректную неотрицательную цену");
+          return;
+        }
+
+        payload.price = price;
+      }
 
       await api.updateProduct(editId, payload);
       setEditId("");
@@ -304,17 +405,26 @@ export default function App() {
 
     try {
       const response = await api.getUserById(selectedUserId);
-      setSelectedUser(response.data);
+      const userData = unwrapCachedResponse(response.data);
+      setSelectedUser(userData);
       setUserEditForm({
-        id: response.data.id,
-        email: response.data.email,
-        first_name: response.data.first_name,
-        last_name: response.data.last_name,
-        role: response.data.role,
+        id: userData.id,
+        email: userData.email,
+        first_name: userData.first_name,
+        last_name: userData.last_name,
+        role: userData.role,
       });
+      setCacheInfo((current) => ({
+        ...current,
+        user: response.data?.source || "",
+      }));
       setMessage("Пользователь найден");
     } catch (error) {
       setSelectedUser(null);
+      setCacheInfo((current) => ({
+        ...current,
+        user: "",
+      }));
       setMessage(getErrorMessage(error, "Ошибка получения пользователя"));
     }
   }
@@ -330,11 +440,12 @@ export default function App() {
         last_name: userEditForm.last_name,
         role: userEditForm.role,
       });
+      const updatedUser = response.data;
 
-      setSelectedUser(response.data);
+      setSelectedUser(updatedUser);
 
-      if (user?.id === response.data.id) {
-        setUser(response.data);
+      if (user?.id === updatedUser.id) {
+        setUser(updatedUser);
       }
 
       await loadUsers();
@@ -478,7 +589,9 @@ export default function App() {
             {formatRole(user.role)}
           </p>
         </div>
-        <button onClick={handleLogout}>Выйти</button>
+        <button onClick={handleLogout} type="button">
+          Выйти
+        </button>
       </div>
 
       {message && <div className="message">{message}</div>}
@@ -486,7 +599,9 @@ export default function App() {
       <div className="grid">
         <div className="card">
           <h2>Текущий пользователь</h2>
-          <button onClick={restoreSession}>Обновить данные</button>
+          <button onClick={() => void restoreSession()} type="button">
+            Обновить данные
+          </button>
           <pre>{JSON.stringify(user, null, 2)}</pre>
         </div>
 
@@ -503,6 +618,12 @@ export default function App() {
 
             <button type="submit">Получить</button>
 
+            {cacheInfo.product && (
+              <p className="cacheMeta">
+                Источник: {cacheInfo.product === "cache" ? "кэш" : "сервер"}
+              </p>
+            )}
+
             {selectedProduct && (
               <pre>{JSON.stringify(selectedProduct, null, 2)}</pre>
             )}
@@ -514,6 +635,7 @@ export default function App() {
             <h2>Создать товар</h2>
 
             <input
+              name="title"
               type="text"
               placeholder="Название"
               value={createForm.title}
@@ -523,6 +645,7 @@ export default function App() {
             />
 
             <input
+              name="category"
               type="text"
               placeholder="Категория"
               value={createForm.category}
@@ -532,6 +655,7 @@ export default function App() {
             />
 
             <textarea
+              name="description"
               placeholder="Описание"
               value={createForm.description}
               onChange={(event) =>
@@ -543,7 +667,11 @@ export default function App() {
             />
 
             <input
+              name="price"
               type="number"
+              inputMode="decimal"
+              step="0.01"
+              min="0"
               placeholder="Цена"
               value={createForm.price}
               onChange={(event) =>
@@ -638,6 +766,12 @@ export default function App() {
 
             <button type="submit">Получить</button>
 
+            {cacheInfo.user && (
+              <p className="cacheMeta">
+                Источник: {cacheInfo.user === "cache" ? "кэш" : "сервер"}
+              </p>
+            )}
+
             {selectedUser && <pre>{JSON.stringify(selectedUser, null, 2)}</pre>}
           </form>
         )}
@@ -727,8 +861,16 @@ export default function App() {
       <div className="card">
         <div className="listHeader">
           <h2>Список товаров</h2>
-          <button onClick={loadProducts}>Обновить список</button>
+          <button onClick={() => void loadProducts()} type="button">
+            Обновить список
+          </button>
         </div>
+
+        {cacheInfo.products && (
+          <p className="cacheMeta">
+            Источник: {cacheInfo.products === "cache" ? "кэш" : "сервер"}
+          </p>
+        )}
 
         {products.length === 0 ? (
           <p>Товаров пока нет</p>
@@ -762,8 +904,16 @@ export default function App() {
         <div className="card">
           <div className="listHeader">
             <h2>Список пользователей</h2>
-            <button onClick={loadUsers}>Обновить список</button>
+            <button onClick={() => void loadUsers()} type="button">
+              Обновить список
+            </button>
           </div>
+
+          {cacheInfo.users && (
+            <p className="cacheMeta">
+              Источник: {cacheInfo.users === "cache" ? "кэш" : "сервер"}
+            </p>
+          )}
 
           {users.length === 0 ? (
             <p>Пользователей пока нет</p>

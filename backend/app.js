@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
+const { createClient } = require("redis");
 const { nanoid } = require("nanoid");
 
 const app = express();
@@ -19,6 +20,28 @@ const REFRESH_SECRET = "refresh_secret_key_change_me";
 
 const ACCESS_EXPIRES_IN = "15m";
 const REFRESH_EXPIRES_IN = "7d";
+const USERS_CACHE_TTL = 60;
+const PRODUCTS_CACHE_TTL = 600;
+
+const redisUrl = process.env.REDIS_URL || "redis://127.0.0.1:6379";
+const redisClient = createClient({
+  url: redisUrl,
+  socket: {
+    connectTimeout: 1000,
+    reconnectStrategy: false,
+  },
+});
+let redisReady = false;
+
+redisClient.on("error", (error) => {
+  redisReady = false;
+  console.error("Redis error:", error.message);
+});
+
+redisClient.on("ready", () => {
+  redisReady = true;
+  console.log(`Redis connected: ${redisUrl}`);
+});
 
 function isAllowedOrigin(origin) {
   if (!origin) return true;
@@ -227,6 +250,97 @@ function isValidRole(role) {
   return Object.values(ROLES).includes(role);
 }
 
+async function initRedis() {
+  try {
+    if (!redisClient.isOpen) {
+      await redisClient.connect();
+    }
+  } catch (error) {
+    redisReady = false;
+    console.warn("Redis is unavailable, caching disabled:", error.message);
+  }
+}
+
+async function getFromCache(key) {
+  if (!redisReady) {
+    return null;
+  }
+
+  try {
+    return await redisClient.get(key);
+  } catch (error) {
+    console.warn(`Failed to read cache key "${key}":`, error.message);
+    return null;
+  }
+}
+
+async function saveToCache(key, ttlSeconds, data) {
+  if (!redisReady) {
+    return;
+  }
+
+  try {
+    await redisClient.set(key, JSON.stringify(data), {
+      EX: ttlSeconds,
+    });
+  } catch (error) {
+    console.warn(`Failed to write cache key "${key}":`, error.message);
+  }
+}
+
+async function deleteCacheKeys(keys) {
+  if (!redisReady || keys.length === 0) {
+    return;
+  }
+
+  try {
+    await redisClient.del(keys);
+  } catch (error) {
+    console.warn("Failed to invalidate cache:", error.message);
+  }
+}
+
+async function invalidateUsersCache(userId) {
+  const keys = ["users:list"];
+  if (userId) {
+    keys.push(`users:${userId}`);
+  }
+
+  await deleteCacheKeys(keys);
+}
+
+async function invalidateProductsCache(productId) {
+  const keys = ["products:list"];
+  if (productId) {
+    keys.push(`products:${productId}`);
+  }
+
+  await deleteCacheKeys(keys);
+}
+
+function cacheMiddleware(getKey, ttlSeconds) {
+  return async (req, res, next) => {
+    const cacheKey =
+      typeof getKey === "function" ? getKey(req) : String(getKey);
+
+    const cachedValue = await getFromCache(cacheKey);
+    if (cachedValue) {
+      try {
+        return res.json({
+          source: "cache",
+          data: JSON.parse(cachedValue),
+        });
+      } catch (error) {
+        console.warn(`Failed to parse cache key "${cacheKey}":`, error.message);
+      }
+    }
+
+    req.cacheKey = cacheKey;
+    req.cacheTTL = ttlSeconds;
+    return next();
+  };
+}
+
 app.post("/api/auth/register", async (req, res) => {
   const body = getJsonBody(req, res);
   if (!body) {
@@ -389,8 +503,14 @@ app.get(
   "/api/users",
   authMiddleware,
   roleMiddleware([ROLES.ADMIN]),
-  (req, res) => {
-    return res.json(users.map(sanitizeUser));
+  cacheMiddleware(() => "users:list", USERS_CACHE_TTL),
+  async (req, res) => {
+    const data = users.map(sanitizeUser);
+    await saveToCache(req.cacheKey, req.cacheTTL, data);
+    return res.json({
+      source: "server",
+      data,
+    });
   }
 );
 
@@ -398,14 +518,20 @@ app.get(
   "/api/users/:id",
   authMiddleware,
   roleMiddleware([ROLES.ADMIN]),
-  (req, res) => {
+  cacheMiddleware((req) => `users:${req.params.id}`, USERS_CACHE_TTL),
+  async (req, res) => {
     const user = users.find((item) => item.id === req.params.id);
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    return res.json(sanitizeUser(user));
+    const data = sanitizeUser(user);
+    await saveToCache(req.cacheKey, req.cacheTTL, data);
+    return res.json({
+      source: "server",
+      data,
+    });
   }
 );
 
@@ -413,7 +539,7 @@ app.put(
   "/api/users/:id",
   authMiddleware,
   roleMiddleware([ROLES.ADMIN]),
-  (req, res) => {
+  async (req, res) => {
     const user = users.find((item) => item.id === req.params.id);
 
     if (!user) {
@@ -455,6 +581,7 @@ app.put(
       user.role = role;
     }
 
+    await invalidateUsersCache(user.id);
     return res.json(sanitizeUser(user));
   }
 );
@@ -463,7 +590,7 @@ app.delete(
   "/api/users/:id",
   authMiddleware,
   roleMiddleware([ROLES.ADMIN]),
-  (req, res) => {
+  async (req, res) => {
     const user = users.find((item) => item.id === req.params.id);
 
     if (!user) {
@@ -476,6 +603,7 @@ app.delete(
 
     user.blocked = true;
     revokeRefreshTokensForUser(user.id);
+    await invalidateUsersCache(user.id);
 
     return res.json({
       message: "User blocked",
@@ -488,7 +616,7 @@ app.post(
   "/api/products",
   authMiddleware,
   roleMiddleware([ROLES.SELLER, ROLES.ADMIN]),
-  (req, res) => {
+  async (req, res) => {
     const body = getJsonBody(req, res);
     if (!body) {
       return;
@@ -517,6 +645,7 @@ app.post(
     };
 
     products.push(product);
+    await invalidateProductsCache(product.id);
     return res.status(201).json(product);
   }
 );
@@ -525,8 +654,14 @@ app.get(
   "/api/products",
   authMiddleware,
   roleMiddleware([ROLES.USER, ROLES.SELLER, ROLES.ADMIN]),
-  (req, res) => {
-    return res.json(products);
+  cacheMiddleware(() => "products:list", PRODUCTS_CACHE_TTL),
+  async (req, res) => {
+    const data = products;
+    await saveToCache(req.cacheKey, req.cacheTTL, data);
+    return res.json({
+      source: "server",
+      data,
+    });
   }
 );
 
@@ -534,14 +669,20 @@ app.get(
   "/api/products/:id",
   authMiddleware,
   roleMiddleware([ROLES.USER, ROLES.SELLER, ROLES.ADMIN]),
-  (req, res) => {
+  cacheMiddleware((req) => `products:${req.params.id}`, PRODUCTS_CACHE_TTL),
+  async (req, res) => {
     const product = products.find((item) => item.id === req.params.id);
 
     if (!product) {
       return res.status(404).json({ error: "Product not found" });
     }
 
-    return res.json(product);
+    const data = product;
+    await saveToCache(req.cacheKey, req.cacheTTL, data);
+    return res.json({
+      source: "server",
+      data,
+    });
   }
 );
 
@@ -549,7 +690,7 @@ app.put(
   "/api/products/:id",
   authMiddleware,
   roleMiddleware([ROLES.SELLER, ROLES.ADMIN]),
-  (req, res) => {
+  async (req, res) => {
     const product = products.find((item) => item.id === req.params.id);
 
     if (!product) {
@@ -577,6 +718,7 @@ app.put(
       product.price = price;
     }
 
+    await invalidateProductsCache(product.id);
     return res.json(product);
   }
 );
@@ -585,7 +727,7 @@ app.delete(
   "/api/products/:id",
   authMiddleware,
   roleMiddleware([ROLES.ADMIN]),
-  (req, res) => {
+  async (req, res) => {
     const index = products.findIndex((item) => item.id === req.params.id);
 
     if (index === -1) {
@@ -593,6 +735,7 @@ app.delete(
     }
 
     const deleted = products.splice(index, 1)[0];
+    await invalidateProductsCache(deleted.id);
 
     return res.json({
       message: "Product deleted",
@@ -601,10 +744,12 @@ app.delete(
   }
 );
 
-app.listen(PORT, "0.0.0.0", () => {
-  const backendUrl = process.env.CODESPACE_NAME
-    ? `https://${process.env.CODESPACE_NAME}-${PORT}.app.github.dev`
-    : `http://localhost:${PORT}`;
+initRedis().finally(() => {
+  app.listen(PORT, "0.0.0.0", () => {
+    const backendUrl = process.env.CODESPACE_NAME
+      ? `https://${process.env.CODESPACE_NAME}-${PORT}.app.github.dev`
+      : `http://localhost:${PORT}`;
 
-  console.log(`Backend started: ${backendUrl}`);
+    console.log(`Backend started: ${backendUrl}`);
+  });
 });

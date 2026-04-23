@@ -1,0 +1,31 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: web-redis
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: ./backend
+    container_name: web-backend
+    environment:
+      PORT: 3000
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+    ports:
+      - "3000:3000"
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: web-frontend
+    environment:
+      PORT: 5173
+      BACKEND_PORT: 3000
+      VITE_API_PROXY_TARGET: http://backend:3000
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
