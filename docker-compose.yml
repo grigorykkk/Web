@@ -1,31 +1,60 @@
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: web-redis
-    ports:
-      - "6379:6379"
-
-  backend:
+  backend1:
     build:
       context: ./backend
-    container_name: web-backend
+    container_name: practice22-backend1
     environment:
       PORT: 3000
-      REDIS_URL: redis://redis:6379
-    depends_on:
-      - redis
+      INSTANCE_NAME: backend-1
+      INSTANCE_ROLE: primary
     ports:
       - "3000:3000"
 
-  frontend:
+  backend2:
     build:
-      context: ./frontend
-    container_name: web-frontend
+      context: ./backend
+    container_name: practice22-backend2
     environment:
-      PORT: 5173
-      BACKEND_PORT: 3000
-      VITE_API_PROXY_TARGET: http://backend:3000
-    depends_on:
-      - backend
+      PORT: 3000
+      INSTANCE_NAME: backend-2
+      INSTANCE_ROLE: primary
     ports:
-      - "5173:5173"
+      - "3001:3000"
+
+  backend3:
+    build:
+      context: ./backend
+    container_name: practice22-backend3
+    environment:
+      PORT: 3000
+      INSTANCE_NAME: backend-3
+      INSTANCE_ROLE: backup
+    ports:
+      - "3002:3000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: practice22-nginx
+    depends_on:
+      - backend1
+      - backend2
+      - backend3
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/static:/usr/share/nginx/html:ro
+
+  haproxy:
+    image: haproxy:3.1-alpine
+    container_name: practice22-haproxy
+    depends_on:
+      - backend1
+      - backend2
+      - backend3
+    ports:
+      - "8081:80"
+      - "8404:8404"
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+

@@ -1,31 +1,13 @@
 {
-  "name": "web",
+  "name": "practice22-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "app.js",
+  "private": true,
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/grigorykkk/Web.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/grigorykkk/Web/issues"
-  },
-  "homepage": "https://github.com/grigorykkk/Web#readme",
   "dependencies": {
-    "bcrypt": "^6.0.0",
-    "cors": "^2.8.6",
-    "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3",
-    "nanoid": "^5.1.6",
-    "redis": "^5.12.1",
-    "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.1"
+    "express": "^5.1.0"
   }
 }
+

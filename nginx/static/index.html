@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>terminal</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d10;
+        --panel: #111317;
+        --panel-top: #1c1f24;
+        --line: rgba(255, 255, 255, 0.08);
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --green: #7ee787;
+        --blue: #79c0ff;
+        --red: #ff7b72;
+        --shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Menlo, Monaco, "Courier New", monospace;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+      }
+
+      .terminal {
+        width: min(1100px, 100%);
+        min-height: 700px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .titlebar {
+        display: flex;
+        align-items: center;
+        padding: 10px 14px;
+        background: var(--panel-top);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .traffic {
+        display: flex;
+        gap: 8px;
+      }
+
+      .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+      }
+
+      .dot.red { background: #ff5f57; }
+      .dot.yellow { background: #febc2e; }
+      .dot.green { background: #28c840; }
+
+      .title {
+        color: var(--muted);
+        font-size: 0.86rem;
+        margin-left: 12px;
+      }
+
+      .body {
+        min-height: 640px;
+      }
+
+      .screen {
+        padding: 14px;
+      }
+
+      .intro {
+        color: var(--muted);
+        line-height: 1.5;
+        font-size: 0.9rem;
+        margin: 0 0 14px;
+      }
+
+      .prompt-line,
+      .output-line {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        line-height: 1.5;
+        font-size: 0.92rem;
+      }
+
+      .prompt-line + .prompt-line,
+      .output-line + .output-line {
+        margin-top: 8px;
+      }
+
+      .prompt {
+        color: var(--green);
+        white-space: nowrap;
+      }
+
+      .cmd {
+        color: var(--text);
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin: 0 0 12px;
+      }
+
+      button {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: #0d1117;
+        color: var(--text);
+        border-radius: 6px;
+        padding: 10px 12px;
+        text-align: center;
+        font: inherit;
+        cursor: pointer;
+        transition: background 160ms ease, border-color 160ms ease;
+      }
+
+      button:hover {
+        background: #161b22;
+        border-color: rgba(255, 255, 255, 0.14);
+      }
+
+      .terminal-screen {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        overflow: hidden;
+        background: #0d1117;
+      }
+
+      .terminal-header {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .terminal-output {
+        padding: 12px;
+        min-height: 560px;
+        max-height: 560px;
+        overflow: auto;
+      }
+
+      .entry {
+        padding-bottom: 12px;
+        margin-bottom: 12px;
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+      }
+
+      .entry:last-child {
+        margin-bottom: 0;
+        padding-bottom: 0;
+        border-bottom: 0;
+      }
+
+      pre {
+        margin: 8px 0 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: #d7e3f4;
+        font-size: 0.88rem;
+      }
+
+      .status {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .status span {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 6px 10px;
+        color: var(--muted);
+        background: #0d1117;
+        font-size: 0.84rem;
+      }
+
+      .cursor {
+        display: inline-block;
+        width: 10px;
+        height: 1.1em;
+        margin-left: 4px;
+        vertical-align: text-bottom;
+        background: var(--green);
+        animation: blink 1s step-end infinite;
+      }
+
+      @keyframes blink {
+        50% { opacity: 0; }
+      }
+
+      @media (max-width: 900px) {
+        .toolbar {
+          grid-template-columns: 1fr;
+        }
+
+        .terminal-output {
+          min-height: 420px;
+          max-height: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="terminal">
+      <div class="titlebar">
+        <div class="traffic">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+        </div>
+        <div class="title">terminal</div>
+      </div>
+
+      <div class="body">
+        <section class="screen">
+          <div class="prompt-line">
+            <span class="prompt">student@Web %</span>
+            <span class="cmd">terminal</span>
+          </div>
+          <p class="intro">
+            Проверка балансировки через nginx и haproxy. Вывод ниже показывает, какой backend обработал запрос.
+          </p>
+          <div class="toolbar">
+            <button id="single-request">Один запрос через Nginx</button>
+            <button id="multi-request">Серия запросов через Nginx</button>
+            <button id="haproxy-request">Один запрос через HAProxy</button>
+          </div>
+          <div class="terminal-screen">
+            <div class="terminal-header">Last login: load balancer demo session</div>
+            <div class="terminal-output" id="output"></div>
+          </div>
+          <div class="status" id="stats"></div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const output = document.getElementById("output");
+      const stats = document.getElementById("stats");
+      const counts = {};
+
+      function renderStats() {
+        const entries = Object.entries(counts);
+        if (!entries.length) {
+          stats.innerHTML = "<span>no requests executed yet</span>";
+          return;
+        }
+
+        stats.innerHTML = entries
+          .map(([instance, count]) => `<span>${instance}: ${count}</span>`)
+          .join("");
+      }
+
+      function appendEntry(command, payload, isError = false) {
+        const entry = document.createElement("section");
+        entry.className = "entry";
+        entry.innerHTML = `
+          <div class="prompt-line">
+            <span class="prompt">student@Web %</span>
+            <span class="cmd">${command}</span>
+          </div>
+          <div class="output-line">
+            <span class="muted">${isError ? "error" : "json"}</span>
+          </div>
+          <pre>${JSON.stringify(payload, null, 2)}</pre>
+        `;
+        output.prepend(entry);
+      }
+
+      function appendBanner() {
+        const entry = document.createElement("section");
+        entry.className = "entry";
+        entry.innerHTML = `
+          <div class="output-line"><span class="muted">terminal booted successfully</span></div>
+          <div class="output-line"><span class="muted">use the commands on the left to inspect nginx and haproxy balancing</span><span class="cursor"></span></div>
+        `;
+        output.append(entry);
+      }
+
+      async function fetchJson(url) {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return response.json();
+      }
+
+      async function nginxRequest() {
+        const payload = await fetchJson("/api/");
+        counts[payload.instance] = (counts[payload.instance] || 0) + 1;
+        renderStats();
+        appendEntry("curl http://localhost:8080/api/", payload);
+      }
+
+      async function nginxBurst() {
+        for (let index = 0; index < 12; index += 1) {
+          await nginxRequest();
+        }
+      }
+
+      async function haproxyRequest() {
+        const payload = await fetchJson("/haproxy/");
+        counts[payload.instance] = (counts[payload.instance] || 0) + 1;
+        renderStats();
+        appendEntry("curl http://localhost:8080/haproxy/", payload);
+      }
+
+      document.getElementById("single-request").addEventListener("click", () => {
+        nginxRequest().catch((error) => appendEntry("curl http://localhost:8080/api/", { message: error.message }, true));
+      });
+
+      document.getElementById("multi-request").addEventListener("click", () => {
+        nginxBurst().catch((error) => appendEntry("for i in {1..12}; do curl ...; done", { message: error.message }, true));
+      });
+
+      document.getElementById("haproxy-request").addEventListener("click", () => {
+        haproxyRequest().catch((error) => appendEntry("curl http://localhost:8080/haproxy/", { message: error.message }, true));
+      });
+
+      renderStats();
+      appendBanner();
+    </script>
+  </body>
+</html>
